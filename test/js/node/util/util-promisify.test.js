@@ -23,8 +23,8 @@
 import fs from "node:fs";
 // TODO: vm module not implemented by bun yet
 // import vm from 'node:vm';
-import { promisify } from "util";
 import assert from "assert";
+import { promisify } from "util";
 
 const stat = promisify(fs.stat);
 
@@ -83,12 +83,11 @@ describe("util.promisify", () => {
       assert.strictEqual(promisify(promisify(fn)), promisifedFn);
     });
 
-    it.skip("should register shared promisify symbol", () => {
+    it("should register shared promisify symbol", () => {
       function fn() {}
 
       function promisifiedFn() {}
 
-      // TODO: register shared symbol promisify.custom
       // util.promisify.custom is a shared symbol which can be accessed
       // as `Symbol.for("nodejs.util.promisify.custom")`.
       const kCustomPromisifiedSymbol = Symbol.for("nodejs.util.promisify.custom");

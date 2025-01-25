@@ -1,3 +1,9 @@
+/**
+ * Browser polyfill for the `"url"` module.
+ *
+ * Imported on usage in `bun build --target=browser`
+ */
+// -----------------------------------------------------------------------------
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -20,7 +26,7 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 "use strict";
-const { URL, URLSearchParams, [Symbol.for("Bun.lazy")]: lazy } = globalThis;
+const { URL, URLSearchParams } = globalThis;
 
 function util_isString(arg) {
   return typeof arg === "string";
@@ -732,20 +738,15 @@ Url.prototype.parseHost = function () {
   if (host) this.hostname = host;
 };
 
-export { URL, URLSearchParams };
-export { urlParse as parse };
-export { urlResolve as resolve };
-export { urlResolveObject as resolveObject };
-export { urlFormat as format };
-export { Url as Url };
-
-export var pathToFileURL;
-export var fileURLToPath;
-
-if (lazy) {
-  pathToFileURL = lazy("pathToFileURL");
-  fileURLToPath = lazy("fileURLToPath");
-}
+export {
+  URL,
+  URLSearchParams,
+  Url as Url,
+  urlFormat as format,
+  urlParse as parse,
+  urlResolve as resolve,
+  urlResolveObject as resolveObject,
+};
 
 export default {
   parse: urlParse,
@@ -753,8 +754,10 @@ export default {
   resolveObject: urlResolveObject,
   format: urlFormat,
   Url: Url,
-  pathToFileURL: pathToFileURL,
-  fileURLToPath: fileURLToPath,
+  // pathToFileURL: pathToFileURL,
+  // fileURLToPath: fileURLToPath,
+  // domainToASCII,
+  // domainToUnicode,
   URL,
   URLSearchParams,
 };

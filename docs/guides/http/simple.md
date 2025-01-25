@@ -4,7 +4,7 @@ name: Write a simple HTTP server
 
 This starts an HTTP server listening on port `3000`. It responds to all requests with a `Response` with status `200` and body `"Welcome to Bun!"`.
 
-See [`Bun.serve`](/docs/api/http) for details.
+See [`Bun.serve`](https://bun.sh/docs/api/http) for details.
 
 ```ts
 const server = Bun.serve({
@@ -14,5 +14,5 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Listening on localhost: ${server.port}`);
+console.log(`Listening on ${server.url}`);
 ```

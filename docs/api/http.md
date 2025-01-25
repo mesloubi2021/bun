@@ -1,7 +1,7 @@
 The page primarily documents the Bun-native `Bun.serve` API. Bun also implements [`fetch`](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API) and the Node.js [`http`](https://nodejs.org/api/http.html) and [`https`](https://nodejs.org/api/https.html) modules.
 
 {% callout %}
-These modules have been re-implemented to use Bun's fast internal HTTP infrastructure. Feel free to use these modules directly; frameworks like [Express](https://expressjs.com/) that depend on these modules should work out of the box. For granular compatibility information, see [Runtime > Node.js APIs](/docs/runtime/nodejs-apis).
+These modules have been re-implemented to use Bun's fast internal HTTP infrastructure. Feel free to use these modules directly; frameworks like [Express](https://expressjs.com/) that depend on these modules should work out of the box. For granular compatibility information, see [Runtime > Node.js APIs](https://bun.sh/docs/runtime/nodejs-apis).
 {% /callout %}
 
 To start a high-performance HTTP server with a clean API, the recommended approach is [`Bun.serve`](#start-a-server-bun-serve).
@@ -18,6 +18,8 @@ Bun.serve({
 });
 ```
 
+### `fetch` request handler
+
 The `fetch` handler handles incoming requests. It receives a [`Request`](https://developer.mozilla.org/en-US/docs/Web/API/Request) object and returns a [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response) or `Promise<Response>`.
 
 ```ts
@@ -31,7 +33,156 @@ Bun.serve({
 });
 ```
 
-To configure which port and hostname the server will listen on:
+The `fetch` handler supports async/await:
+
+```ts
+import { sleep, serve } from "bun";
+serve({
+  async fetch(req) {
+    const start = performance.now();
+    await sleep(10);
+    const end = performance.now();
+    return new Response(`Slept for ${end - start}ms`);
+  },
+});
+```
+
+Promise-based responses are also supported:
+
+```ts
+Bun.serve({
+  fetch(req) {
+    // Forward the request to another server.
+    return fetch("https://example.com");
+  },
+});
+```
+
+You can also access the `Server` object from the `fetch` handler. It's the second argument passed to the `fetch` function.
+
+```ts
+// `server` is passed in as the second argument to `fetch`.
+const server = Bun.serve({
+  fetch(req, server) {
+    const ip = server.requestIP(req);
+    return new Response(`Your IP is ${ip}`);
+  },
+});
+```
+
+### Static routes
+
+Use the `static` option to serve static `Response` objects by route.
+
+```ts
+// Bun v1.1.27+ required
+Bun.serve({
+  static: {
+    // health-check endpoint
+    "/api/health-check": new Response("All good!"),
+
+    // redirect from /old-link to /new-link
+    "/old-link": Response.redirect("/new-link", 301),
+
+    // serve static text
+    "/": new Response("Hello World"),
+
+    // serve a file by buffering it in memory
+    "/index.html": new Response(await Bun.file("./index.html").bytes(), {
+      headers: {
+        "Content-Type": "text/html",
+      },
+    }),
+    "/favicon.ico": new Response(await Bun.file("./favicon.ico").bytes(), {
+      headers: {
+        "Content-Type": "image/x-icon",
+      },
+    }),
+
+    // serve JSON
+    "/api/version.json": Response.json({ version: "1.0.0" }),
+  },
+
+  fetch(req) {
+    return new Response("404!");
+  },
+});
+```
+
+Static routes support headers, status code, and other `Response` options.
+
+```ts
+Bun.serve({
+  static: {
+    "/api/time": new Response(new Date().toISOString(), {
+      headers: {
+        "X-Custom-Header": "Bun!",
+      },
+    }),
+  },
+
+  fetch(req) {
+    return new Response("404!");
+  },
+});
+```
+
+Static routes can serve Response bodies faster than `fetch` handlers because they don't create `Request` objects, they don't create `AbortSignal`, they don't create additional `Response` objects. The only per-request memory allocation is the TCP/TLS socket data needed for each request.
+
+{% note %}
+`static` is experimental
+{% /note %}
+
+Static route responses are cached for the lifetime of the server object. To reload static routes, call `server.reload(options)`.
+
+```ts
+const server = Bun.serve({
+  static: {
+    "/api/time": new Response(new Date().toISOString()),
+  },
+
+  fetch(req) {
+    return new Response("404!");
+  },
+});
+
+// Update the time every second.
+setInterval(() => {
+  server.reload({
+    static: {
+      "/api/time": new Response(new Date().toISOString()),
+    },
+
+    fetch(req) {
+      return new Response("404!");
+    },
+  });
+}, 1000);
+```
+
+Reloading static routes only impact the next request. In-flight requests continue to use the old static routes. After in-flight requests to old static routes are finished, the old static routes are freed from memory.
+
+To simplify error handling, static routes do not support streaming response bodies from `ReadableStream` or an `AsyncIterator`. Fortunately, you can still buffer the response in memory first:
+
+```ts
+const time = await fetch("https://api.example.com/v1/data");
+// Buffer the response in memory first.
+const blob = await time.blob();
+
+const server = Bun.serve({
+  static: {
+    "/api/data": new Response(blob),
+  },
+
+  fetch(req) {
+    return new Response("404!");
+  },
+});
+```
+
+### Changing the `port` and `hostname`
+
+To configure which port and hostname the server will listen on, set `port` and `hostname` in the options object.
 
 ```ts
 Bun.serve({
@@ -43,7 +194,58 @@ Bun.serve({
 });
 ```
 
-To listen on a [unix domain socket](https://en.wikipedia.org/wiki/Unix_domain_socket):
+To randomly select an available port, set `port` to `0`.
+
+```ts
+const server = Bun.serve({
+  port: 0, // random port
+  fetch(req) {
+    return new Response("404!");
+  },
+});
+
+// server.port is the randomly selected port
+console.log(server.port);
+```
+
+You can view the chosen port by accessing the `port` property on the server object, or by accessing the `url` property.
+
+```ts
+console.log(server.port); // 3000
+console.log(server.url); // http://localhost:3000
+```
+
+#### Configuring a default port
+
+Bun supports several options and environment variables to configure the default port. The default port is used when the `port` option is not set.
+
+- `--port` CLI flag
+
+```sh
+$ bun --port=4002 server.ts
+```
+
+- `BUN_PORT` environment variable
+
+```sh
+$ BUN_PORT=4002 bun server.ts
+```
+
+- `PORT` environment variable
+
+```sh
+$ PORT=4002 bun server.ts
+```
+
+- `NODE_PORT` environment variable
+
+```sh
+$ NODE_PORT=4002 bun server.ts
+```
+
+### Unix domain sockets
+
+To listen on a [unix domain socket](https://en.wikipedia.org/wiki/Unix_domain_socket), pass the `unix` option with the path to the socket.
 
 ```ts
 Bun.serve({
@@ -54,9 +256,24 @@ Bun.serve({
 });
 ```
 
+### Abstract namespace sockets
+
+Bun supports Linux abstract namespace sockets. To use an abstract namespace socket, prefix the `unix` path with a null byte.
+
+```ts
+Bun.serve({
+  unix: "\0my-abstract-socket", // abstract namespace socket
+  fetch(req) {
+    return new Response(`404!`);
+  },
+});
+```
+
+Unlike unix domain sockets, abstract namespace sockets are not bound to the filesystem and are automatically removed when the last reference to the socket is closed.
+
 ## Error handling
 
-To activate development mode, set `development: true`. By default, development mode is _enabled_ unless `NODE_ENV` is `production`.
+To activate development mode, set `development: true`.
 
 ```ts
 Bun.serve({
@@ -70,6 +287,8 @@ Bun.serve({
 In development mode, Bun will surface errors in-browser with a built-in error page.
 
 {% image src="/images/exception_page.png" caption="Bun's built-in 500 page" /%}
+
+### `error` callback
 
 To handle server-side errors, implement an `error` handler. This function should return a `Response` to serve to the client when an error occurs. This response will supersede Bun's default error page in `development` mode.
 
@@ -171,19 +390,70 @@ Optionally, you can override the trusted CA certificates by passing a value for 
   });
 ```
 
-To override Diffie-Helman parameters:
+To override Diffie-Hellman parameters:
 
 ```ts
 Bun.serve({
   // ...
   tls: {
     // other config
-    dhParamsFile: "/path/to/dhparams.pem", // path to Diffie Helman parameters
+    dhParamsFile: "/path/to/dhparams.pem", // path to Diffie Hellman parameters
   },
 });
 ```
 
-## Object syntax
+### Server name indication (SNI)
+
+To configure the server name indication (SNI) for the server, set the `serverName` field in the `tls` object.
+
+```ts
+Bun.serve({
+  // ...
+  tls: {
+    // ... other config
+    serverName: "my-server.com", // SNI
+  },
+});
+```
+
+To allow multiple server names, pass an array of objects to `tls`, each with a `serverName` field.
+
+```ts
+Bun.serve({
+  // ...
+  tls: [
+    {
+      key: Bun.file("./key1.pem"),
+      cert: Bun.file("./cert1.pem"),
+      serverName: "my-server1.com",
+    },
+    {
+      key: Bun.file("./key2.pem"),
+      cert: Bun.file("./cert2.pem"),
+      serverName: "my-server2.com",
+    },
+  ],
+});
+```
+
+## idleTimeout
+
+To configure the idle timeout, set the `idleTimeout` field in Bun.serve.
+
+```ts
+Bun.serve({
+  // 10 seconds:
+  idleTimeout: 10,
+
+  fetch(req) {
+    return new Response("Bun!");
+  },
+});
+```
+
+This is the maximum amount of time a connection is allowed to be idle before the server closes it. A connection is idling if there is no data sent or received.
+
+## export default syntax
 
 Thus far, the examples on this page have used the explicit `Bun.serve` API. Bun also supports an alternate syntax.
 
@@ -205,7 +475,7 @@ Instead of passing the server options into `Bun.serve`, `export default` it. Thi
 $ bun --hot server.ts
 ``` -->
 
-<!-- It's possible to configure hot reloading while using the explicit `Bun.serve` API; for details refer to [Runtime > Hot reloading](/docs/runtime/hot). -->
+<!-- It's possible to configure hot reloading while using the explicit `Bun.serve` API; for details refer to [Runtime > Hot reloading](https://bun.sh/docs/runtime/hot). -->
 
 ## Streaming files
 
@@ -293,37 +563,98 @@ The `Bun.serve` server can handle roughly 2.5x more requests per second than Nod
 ```ts
 interface Bun {
   serve(options: {
-    fetch: (req: Request, server: Server) => Response | Promise<Response>;
-    hostname?: string;
-    port?: number;
     development?: boolean;
-    error?: (error: Error) => Response | Promise<Response>;
-    tls?: {
-      key?:
-        | string
-        | TypedArray
-        | BunFile
-        | Array<string | TypedArray | BunFile>;
-      cert?:
-        | string
-        | TypedArray
-        | BunFile
-        | Array<string | TypedArray | BunFile>;
-      ca?: string | TypedArray | BunFile | Array<string | TypedArray | BunFile>;
-      passphrase?: string;
-      dhParamsFile?: string;
-    };
+    error?: (
+      request: ErrorLike,
+    ) => Response | Promise<Response> | undefined | Promise<undefined>;
+    fetch(request: Request, server: Server): Response | Promise<Response>;
+    hostname?: string;
+    id?: string | null;
     maxRequestBodySize?: number;
-    lowMemoryMode?: boolean;
+    port?: string | number;
+    reusePort?: boolean;
+    tls?: TLSOptions | Array<TLSOptions>;
+    unix: string;
+    websocket: WebSocketHandler<WebSocketDataType>;
   }): Server;
 }
 
+interface TLSOptions {
+  ca?: string | Buffer | BunFile | Array<string | Buffer | BunFile> | undefined;
+  cert?:
+    | string
+    | Buffer
+    | BunFile
+    | Array<string | Buffer | BunFile>
+    | undefined;
+  dhParamsFile?: string;
+  key?:
+    | string
+    | Buffer
+    | BunFile
+    | Array<string | Buffer | BunFile>
+    | undefined;
+  lowMemoryMode?: boolean;
+  passphrase?: string;
+  secureOptions?: number | undefined;
+  serverName?: string;
+}
+
+interface WebSocketHandler<T = undefined> {
+  backpressureLimit?: number;
+  close?(
+    ws: ServerWebSocket<T>,
+    code: number,
+    reason: string,
+  ): void | Promise<void>;
+  closeOnBackpressureLimit?: boolean;
+  drain?(ws: ServerWebSocket<T>): void | Promise<void>;
+  idleTimeout?: number;
+  maxPayloadLength?: number;
+  message(
+    ws: ServerWebSocket<T>,
+    message: string | Buffer,
+  ): void | Promise<void>;
+  open?(ws: ServerWebSocket<T>): void | Promise<void>;
+  perMessageDeflate?:
+    | boolean
+    | {
+        compress?: WebSocketCompressor | boolean;
+        decompress?: WebSocketCompressor | boolean;
+      };
+  ping?(ws: ServerWebSocket<T>, data: Buffer): void | Promise<void>;
+  pong?(ws: ServerWebSocket<T>, data: Buffer): void | Promise<void>;
+  publishToSelf?: boolean;
+  sendPings?: boolean;
+}
+
 interface Server {
-  development: boolean;
-  hostname: string;
-  port: number;
-  pendingRequests: number;
-  stop(): void;
+  fetch(request: Request | string): Response | Promise<Response>;
+  publish(
+    compress?: boolean,
+    data: string | ArrayBufferView | ArrayBuffer | SharedArrayBuffer,
+    topic: string,
+  ): ServerWebSocketSendStatus;
+  ref(): void;
+  reload(options: Serve): void;
+  requestIP(request: Request): SocketAddress | null;
+  stop(closeActiveConnections?: boolean): void;
+  unref(): void;
+  upgrade<T = undefined>(
+    options?: {
+      data?: T;
+      headers?: Bun.HeadersInit;
+    },
+    request: Request,
+  ): boolean;
+
+  readonly development: boolean;
+  readonly hostname: string;
+  readonly id: string;
+  readonly pendingRequests: number;
+  readonly pendingWebSockets: number;
+  readonly port: number;
+  readonly url: URL;
 }
 ```
 

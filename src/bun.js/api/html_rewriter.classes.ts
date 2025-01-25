@@ -1,4 +1,4 @@
-import { define } from "../scripts/class-definitions";
+import { define } from "../../codegen/class-definitions";
 
 export default [
   define({
@@ -80,6 +80,13 @@ export default [
       publicId: {
         getter: "publicId",
         cache: true,
+      },
+      remove: {
+        fn: "remove",
+        length: 0,
+      },
+      removed: {
+        getter: "removed",
       },
     },
   }),

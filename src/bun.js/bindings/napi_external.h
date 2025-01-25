@@ -6,12 +6,16 @@
 
 #include "BunBuiltinNames.h"
 #include "BunClientData.h"
-#include "node_api.h"
 
 namespace Bun {
 
 using namespace JSC;
 using namespace WebCore;
+
+typedef struct {
+    /// The result of call to dlopen to load the module
+    void* dlopenHandle;
+} NapiModuleMeta;
 
 class NapiExternal : public JSC::JSDestructibleObject {
     using Base = JSC::JSDestructibleObject;
@@ -48,18 +52,40 @@ public:
             JSC::TypeInfo(JSC::ObjectType, StructureFlags), info());
     }
 
-    static NapiExternal* create(JSC::VM& vm, JSC::Structure* structure, void* value, void* finalizer_hint, napi_finalize finalizer)
+    static NapiExternal* create(JSC::VM& vm, JSC::Structure* structure, void* value, void* finalizer_hint, void* finalizer)
     {
         NapiExternal* accessor = new (NotNull, JSC::allocateCell<NapiExternal>(vm)) NapiExternal(vm, structure);
+
         accessor->finishCreation(vm, value, finalizer_hint, finalizer);
+
+#if BUN_DEBUG
+        if (auto* callFrame = vm.topCallFrame) {
+            auto origin = callFrame->callerSourceOrigin(vm);
+            accessor->sourceOriginURL = origin.string();
+
+            std::unique_ptr<Vector<StackFrame>> stackTrace = makeUnique<Vector<StackFrame>>();
+            vm.interpreter.getStackTrace(accessor, *stackTrace, 0, 20);
+            if (!stackTrace->isEmpty()) {
+                for (auto& frame : *stackTrace) {
+                    if (frame.hasLineAndColumnInfo()) {
+                        LineColumn lineColumn = frame.computeLineAndColumn();
+                        accessor->sourceOriginLine = lineColumn.line;
+                        accessor->sourceOriginColumn = lineColumn.column;
+                        break;
+                    }
+                }
+            }
+        }
+#endif
         return accessor;
     }
 
-    void finishCreation(JSC::VM& vm, void* value, void* finalizer_hint, napi_finalize finalizer)
+    void finishCreation(JSC::VM& vm, void* value, void* finalizer_hint, void* finalizer)
     {
         Base::finishCreation(vm);
         m_value = value;
         m_finalizerHint = finalizer_hint;
+        napi_env = this->globalObject();
         this->finalizer = finalizer;
     }
 
@@ -69,7 +95,14 @@ public:
 
     void* m_value;
     void* m_finalizerHint;
-    napi_finalize finalizer;
+    void* finalizer;
+    JSGlobalObject* napi_env;
+
+#if BUN_DEBUG
+    String sourceOriginURL = String();
+    unsigned sourceOriginLine = 0;
+    unsigned sourceOriginColumn = 0;
+#endif
 };
 
 } // namespace Zig

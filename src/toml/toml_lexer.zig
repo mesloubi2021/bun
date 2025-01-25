@@ -1,5 +1,5 @@
 const std = @import("std");
-const logger = @import("root").bun.logger;
+const logger = bun.logger;
 const js_ast = bun.JSAst;
 
 const bun = @import("root").bun;
@@ -63,11 +63,14 @@ pub const Lexer = struct {
     number: f64 = 0.0,
     prev_error_loc: logger.Loc = logger.Loc.Empty,
     string_literal_slice: string = "",
+    string_literal_is_ascii: bool = true,
     line_number: u32 = 0,
     token: T = T.t_end_of_file,
     allow_double_bracket: bool = true,
 
     has_newline_before: bool = false,
+
+    should_redact_logs: bool,
 
     pub inline fn loc(self: *const Lexer) logger.Loc {
         return logger.usize2Loc(self.start);
@@ -76,11 +79,15 @@ pub const Lexer = struct {
     pub fn syntaxError(self: *Lexer) !void {
         @setCold(true);
 
-        self.addError(self.start, "Syntax Error!!", .{}, true);
+        // Only add this if there is not already an error.
+        // It is possible that there is a more descriptive error already emitted.
+        if (!self.log.hasErrors())
+            self.addError(self.start, "Syntax Error", .{});
+
         return Error.SyntaxError;
     }
 
-    pub fn addError(self: *Lexer, _loc: usize, comptime format: []const u8, args: anytype, _: bool) void {
+    pub fn addError(self: *Lexer, _loc: usize, comptime format: []const u8, args: anytype) void {
         @setCold(true);
 
         var __loc = logger.usize2Loc(_loc);
@@ -88,24 +95,33 @@ pub const Lexer = struct {
             return;
         }
 
-        self.log.addErrorFmt(&self.source, __loc, self.log.msgs.allocator, format, args) catch unreachable;
+        self.log.addErrorFmtOpts(
+            self.log.msgs.allocator,
+            format,
+            args,
+            .{
+                .source = &self.source,
+                .loc = __loc,
+                .redact_sensitive_information = self.should_redact_logs,
+            },
+        ) catch unreachable;
         self.prev_error_loc = __loc;
     }
 
     pub fn addDefaultError(self: *Lexer, msg: []const u8) !void {
         @setCold(true);
 
-        self.addError(self.start, "{s}", .{msg}, true);
+        self.addError(self.start, "{s}", .{msg});
         return Error.SyntaxError;
     }
 
     pub fn addSyntaxError(self: *Lexer, _loc: usize, comptime fmt: []const u8, args: anytype) !void {
         @setCold(true);
-        self.addError(_loc, fmt, args, false);
+        self.addError(_loc, fmt, args);
         return Error.SyntaxError;
     }
 
-    pub fn addRangeError(self: *Lexer, r: logger.Range, comptime format: []const u8, args: anytype, _: bool) !void {
+    pub fn addRangeError(self: *Lexer, r: logger.Range, comptime format: []const u8, args: anytype) !void {
         @setCold(true);
 
         if (self.prev_error_loc.eql(r.loc)) {
@@ -113,12 +129,13 @@ pub const Lexer = struct {
         }
 
         const errorMessage = std.fmt.allocPrint(self.log.msgs.allocator, format, args) catch unreachable;
-        try self.log.addRangeError(&self.source, r, errorMessage);
+        try self.log.addErrorOpts(errorMessage, .{
+            .source = &self.source,
+            .loc = r.loc,
+            .len = r.len,
+            .redact_sensitive_information = self.should_redact_logs,
+        });
         self.prev_error_loc = r.loc;
-
-        // if (panic) {
-        //     return Error.ParserError;
-        // }
     }
 
     /// Look ahead at the next n codepoints without advancing the iterator.
@@ -180,7 +197,7 @@ pub const Lexer = struct {
 
     fn parseNumericLiteralOrDot(lexer: *Lexer) !void {
         // Number or dot;
-        var first = lexer.code_point;
+        const first = lexer.code_point;
         lexer.step();
 
         // Dot without a digit after it;
@@ -295,11 +312,11 @@ pub const Lexer = struct {
                 isFirst = false;
             }
 
-            var isBigIntegerLiteral = lexer.code_point == 'n' and !hasDotOrExponent;
+            const isBigIntegerLiteral = lexer.code_point == 'n' and !hasDotOrExponent;
 
             // Slow path: do we need to re-scan the input as text?
             if (isBigIntegerLiteral or isInvalidLegacyOctalLiteral) {
-                var text = lexer.raw();
+                const text = lexer.raw();
 
                 // Can't use a leading zero for bigint literals;
                 if (isBigIntegerLiteral and is_legacy_octal_literal) {
@@ -331,7 +348,7 @@ pub const Lexer = struct {
             }
         } else {
             // Floating-point literal;
-            var isInvalidLegacyOctalLiteral = first == '0' and (lexer.code_point == '8' or lexer.code_point == '9');
+            const isInvalidLegacyOctalLiteral = first == '0' and (lexer.code_point == '8' or lexer.code_point == '9');
 
             // Initial digits;
             while (true) {
@@ -618,6 +635,7 @@ pub const Lexer = struct {
                 // unescaped string
                 '\'' => {
                     lexer.step();
+                    lexer.string_literal_is_ascii = true;
                     const start = lexer.end;
                     var is_multiline_string_literal = false;
 
@@ -682,6 +700,7 @@ pub const Lexer = struct {
                     var needs_slow_pass = false;
                     const start = lexer.end;
                     var is_multiline_string_literal = false;
+                    lexer.string_literal_is_ascii = true;
 
                     if (lexer.code_point == '"') {
                         lexer.step();
@@ -769,6 +788,7 @@ pub const Lexer = struct {
                             try lexer.decodeEscapeSequences(start, text, false, @TypeOf(array_list), &array_list);
                         }
                         lexer.string_literal_slice = try array_list.toOwnedSlice();
+                        lexer.string_literal_is_ascii = false;
                     }
 
                     lexer.token = T.t_string_literal;
@@ -801,7 +821,7 @@ pub const Lexer = struct {
         var buf = buf_.*;
         defer buf_.* = buf;
 
-        const iterator = strings.CodepointIterator{ .bytes = text[start..], .i = 0 };
+        const iterator = strings.CodepointIterator{ .bytes = text, .i = 0 };
         var iter = strings.CodepointIterator.Cursor{};
         while (iterator.next(&iter)) {
             const width = iter.width;
@@ -916,7 +936,6 @@ pub const Lexer = struct {
                                     logger.Range{ .loc = .{ .start = @as(i32, @intCast(octal_start)) }, .len = @as(i32, @intCast(iter.i - octal_start)) },
                                     "Invalid legacy octal literal",
                                     .{},
-                                    false,
                                 ) catch unreachable;
                             }
                         },
@@ -1028,7 +1047,6 @@ pub const Lexer = struct {
                                         .{ .loc = .{ .start = @as(i32, @intCast(start + hex_start)) }, .len = @as(i32, @intCast((iter.i - hex_start))) },
                                         "Unicode escape sequence is out of range",
                                         .{},
-                                        true,
                                     );
                                     return;
                                 }
@@ -1124,7 +1142,7 @@ pub const Lexer = struct {
             }
         };
 
-        try lexer.addRangeError(lexer.range(), "Unexpected {s}", .{found}, true);
+        try lexer.addRangeError(lexer.range(), "Unexpected {s}", .{found});
     }
 
     pub fn expectedString(self: *Lexer, text: string) !void {
@@ -1136,7 +1154,7 @@ pub const Lexer = struct {
             }
         };
 
-        try self.addRangeError(self.range(), "Expected {s} but found {s}", .{ text, found }, true);
+        try self.addRangeError(self.range(), "Expected {s} but found {s}", .{ text, found });
     }
 
     pub fn range(self: *Lexer) logger.Range {
@@ -1146,12 +1164,13 @@ pub const Lexer = struct {
         };
     }
 
-    pub fn init(log: *logger.Log, source: logger.Source, allocator: std.mem.Allocator) !Lexer {
+    pub fn init(log: *logger.Log, source: logger.Source, allocator: std.mem.Allocator, redact_logs: bool) !Lexer {
         var lex = Lexer{
             .log = log,
             .source = source,
             .prev_error_loc = logger.Loc.Empty,
             .allocator = allocator,
+            .should_redact_logs = redact_logs,
         };
         lex.step();
         try lex.next();
@@ -1159,8 +1178,16 @@ pub const Lexer = struct {
         return lex;
     }
 
-    pub inline fn toEString(lexer: *Lexer) js_ast.E.String {
-        return js_ast.E.String{ .data = lexer.string_literal_slice };
+    pub inline fn toString(lexer: *Lexer, loc_: logger.Loc) js_ast.Expr {
+        if (lexer.string_literal_is_ascii) {
+            return js_ast.Expr.init(js_ast.E.String, js_ast.E.String{ .data = lexer.string_literal_slice }, loc_);
+        }
+
+        return js_ast.Expr.init(
+            js_ast.E.String,
+            .{ .data = lexer.string_literal_slice },
+            loc_,
+        );
     }
 
     pub fn raw(self: *Lexer) []const u8 {

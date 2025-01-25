@@ -1,34 +1,34 @@
 {
-  "include": [".", "../packages/bun-types/index.d.ts"],
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ESNext"],
-    "module": "ESNext",
-    "target": "ESNext",
-    "moduleResolution": "bundler",
-    "moduleDetection": "force",
-    "allowImportingTsExtensions": true,
-    "experimentalDecorators": true,
-    "noEmit": true,
-    "composite": true,
-    "strict": true,
-    "downlevelIteration": true,
-    "skipLibCheck": true,
-    "jsx": "preserve",
-    "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    "allowJs": true,
-    "resolveJsonModule": true,
-    "noImplicitThis": false,
+    // Path remapping
     "baseUrl": ".",
     "paths": {
       "harness": ["harness.ts"],
       "mkfifo": ["mkfifo.ts"],
       "node-harness": ["js/node/harness.ts"],
       "deno:harness": ["js/deno/harness.ts"],
+      "bun:internal-for-testing": ["../src/js/internal-for-testing.ts"],
       "foo/bar": ["js/bun/resolve/baz.js"],
-      "@faasjs/*": ["js/bun/resolve/*.js"]
-    }
+      "@faasjs/*": ["js/bun/resolve/*.js", "js/bun/resolve/*/src/index.js"],
+      "@faasjs/larger/*": ["js/bun/resolve/*/larger-index.js"]
+    },
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
-
-  "exclude": ["bundler/fixtures", "snapshots", "js/deno"]
+  "include": [
+    //
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+    "../src/js/internal-for-testing.ts"
+  ],
+  "exclude": [
+    "fixtures",
+    "__snapshots__", // bun snapshots (toMatchSnapshot)
+    "./snapshots",
+    "./js/deno",
+    "./node.js" // entire node.js upstream repository
+  ]
 }

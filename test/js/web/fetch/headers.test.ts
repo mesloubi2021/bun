@@ -1,4 +1,4 @@
-import { beforeAll, describe, test, expect } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 
 beforeAll(() => {
   // expect(Headers).toBeDefined();
@@ -22,6 +22,19 @@ describe("Headers", () => {
         "content-type": "text/plain",
       });
       expect(headers.get("content-type")).toBe("text/plain");
+    });
+
+    test("deleted key in header constructor is not kept", () => {
+      const record = {
+        "content-type": "text/plain",
+        "user-agent": "bun",
+      };
+      // @ts-expect-error
+      delete record["content-type"];
+
+      const headers = new Headers(record);
+      expect(headers.get("content-type")).toBeNull();
+      expect(headers.get("user-agent")).toBe("bun");
     });
     test("can create headers from object with duplicates", () => {
       const headers = new Headers({
@@ -422,7 +435,7 @@ describe("Headers", () => {
         "cache-control": "public, immutable",
       });
       expect(Bun.inspect(headers)).toStrictEqual(
-        "Headers {" + "\n  " + `"cache-control": "public, immutable"` + "\n" + "}",
+        "Headers {" + "\n  " + `"cache-control": "public, immutable",` + "\n" + "}",
       );
     });
     it("can convert to json normalized", () => {
@@ -441,7 +454,7 @@ describe("Headers", () => {
             },
             null,
             2,
-          ),
+          ).replace(/(\s+})$/, ",$1"), // add trailing comma
       );
     });
   });

@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
-import { bunEnv, bunExe } from "harness";
-import { _nodeModulePaths, builtinModules, isBuiltin, wrap } from "module";
-import Module from "module";
+import { bunEnv, bunExe, ospath } from "harness";
+import Module, { _nodeModulePaths, builtinModules, isBuiltin, wrap, createRequire } from "module";
 import path from "path";
 
 test("builtinModules exists", () => {
   expect(Array.isArray(builtinModules)).toBe(true);
-  expect(builtinModules).toHaveLength(76);
+  expect(builtinModules).toHaveLength(77);
 });
 
 test("isBuiltin() works", () => {
@@ -24,6 +23,20 @@ test("module.globalPaths exists", () => {
   expect(Array.isArray(require("module").globalPaths)).toBe(true);
 });
 
+test("createRequire trailing slash", () => {
+  const req = createRequire(import.meta.dir + "/");
+  expect(req.resolve("./node-module-module.test.js")).toBe(
+    ospath(path.resolve(import.meta.dir, "./node-module-module.test.js")),
+  );
+});
+
+test("createRequire trailing slash file url", () => {
+  const req = createRequire(Bun.pathToFileURL(import.meta.dir + "/"));
+  expect(req.resolve("./node-module-module.test.js")).toBe(
+    ospath(path.resolve(import.meta.dir, "./node-module-module.test.js")),
+  );
+});
+
 test("Module exists", () => {
   expect(Module).toBeDefined();
 });
@@ -36,21 +49,26 @@ test("module.Module works", () => {
 });
 
 test("_nodeModulePaths() works", () => {
+  const root = path.resolve("/");
   expect(() => {
     _nodeModulePaths();
   }).toThrow();
   expect(_nodeModulePaths(".").length).toBeGreaterThan(0);
-  expect(_nodeModulePaths(".").pop()).toBe("/node_modules");
+  expect(_nodeModulePaths(".").pop()).toBe(root + "node_modules");
   expect(_nodeModulePaths("")).toEqual(_nodeModulePaths("."));
-  expect(_nodeModulePaths("/")).toEqual(["/node_modules"]);
+  expect(_nodeModulePaths("/")).toEqual([root + "node_modules"]);
   expect(_nodeModulePaths("/a/b/c/d")).toEqual([
-    "/a/b/c/d/node_modules",
-    "/a/b/c/node_modules",
-    "/a/b/node_modules",
-    "/a/node_modules",
-    "/node_modules",
+    ospath(root + "a/b/c/d/node_modules"),
+    ospath(root + "a/b/c/node_modules"),
+    ospath(root + "a/b/node_modules"),
+    ospath(root + "a/node_modules"),
+    ospath(root + "node_modules"),
   ]);
-  expect(_nodeModulePaths("/a/b/../d")).toEqual(["/a/d/node_modules", "/a/node_modules", "/node_modules"]);
+  expect(_nodeModulePaths("/a/b/../d")).toEqual([
+    ospath(root + "a/d/node_modules"),
+    ospath(root + "a/node_modules"),
+    ospath(root + "node_modules"),
+  ]);
 });
 
 test("Module.wrap", () => {
@@ -82,21 +100,25 @@ test("Overwriting Module.prototype.require", () => {
   expect(exitCode).toBe(0);
 });
 
-test("Module.prototype._compile", () => {
+test.each([
+  "/file/name/goes/here.js",
+  "file/here.js",
+  "file\\here.js",
+  "/file\\here.js",
+  "\\file\\here.js",
+  "\\file/here.js",
+])("Module.prototype._compile", filename => {
   const module = new Module("module id goes here");
   const starting_exports = module.exports;
-  const r = module._compile(
-    "module.exports = { module, exports, require, __filename, __dirname }",
-    "/file/path/goes/here.js",
-  );
+  const r = module._compile("module.exports = { module, exports, require, __filename, __dirname }", filename);
   expect(r).toBe(undefined);
   expect(module.exports).not.toBe(starting_exports);
   const { module: m, exports: e, require: req, __filename: fn, __dirname: dn } = module.exports;
   expect(m).toBe(module);
   expect(e).toBe(starting_exports);
   expect(req).toBe(module.require);
-  expect(fn).toBe("/file/path/goes/here.js");
-  expect(dn).toBe("/file/path/goes");
+  expect(fn).toBe(filename);
+  expect(dn).toBe(path.dirname(filename));
 });
 
 test("Module._extensions", () => {
@@ -104,4 +126,16 @@ test("Module._extensions", () => {
   expect(".json" in Module._extensions).toBeTrue();
   expect(".node" in Module._extensions).toBeTrue();
   expect(require.extensions).toBe(Module._extensions);
+});
+
+test("Module._resolveLookupPaths", () => {
+  expect(Module._resolveLookupPaths("foo")).toEqual([]);
+  expect(Module._resolveLookupPaths("./bar", { id: "1", filename: "/baz/abc" })).toEqual(["/baz"]);
+  expect(Module._resolveLookupPaths("./bar", {})).toEqual(["."]);
+  expect(Module._resolveLookupPaths("./bar", { paths: ["a"] })).toEqual(["."]);
+  expect(Module._resolveLookupPaths("bar", { paths: ["a"] })).toEqual(["a"]);
+});
+
+test("Module.findSourceMap doesn't throw", () => {
+  expect(Module.findSourceMap("foo")).toEqual(undefined);
 });

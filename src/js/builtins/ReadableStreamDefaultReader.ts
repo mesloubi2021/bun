@@ -34,8 +34,7 @@ export function initializeReadableStreamDefaultReader(this, stream) {
 }
 
 export function cancel(this, reason) {
-  if (!$isReadableStreamDefaultReader(this))
-    return Promise.$reject($makeThisTypeError("ReadableStreamDefaultReader", "cancel"));
+  if (!$isReadableStreamDefaultReader(this)) return Promise.$reject($ERR_INVALID_THIS("ReadableStreamDefaultReader"));
 
   if (!$getByIdDirectPrivate(this, "ownerReadableStream"))
     return Promise.$reject(new TypeError("cancel() called on a reader owned by no readable stream"));
@@ -51,7 +50,7 @@ export function readMany(this: ReadableStreamDefaultReader): ReadableStreamDefau
   if (!stream) throw new TypeError("readMany() called on a reader owned by no readable stream");
 
   const state = $getByIdDirectPrivate(stream, "state");
-  $putByIdDirectPrivate(stream, "disturbed", true);
+  stream.$disturbed = true;
   if (state === $streamClosed) return { value: [], size: 0, done: true };
   else if (state === $streamErrored) {
     throw $getByIdDirectPrivate(stream, "storedError");
@@ -99,12 +98,11 @@ export function readMany(this: ReadableStreamDefaultReader): ReadableStreamDefau
         $putByValDirect(outValues, i, values[i].value);
       }
     }
-
     $resetQueue($getByIdDirectPrivate(controller, "queue"));
 
-    if ($getByIdDirectPrivate(controller, "closeRequested"))
-      $readableStreamClose($getByIdDirectPrivate(controller, "controlledReadableStream"));
-    else if ($isReadableStreamDefaultController(controller)) {
+    if ($getByIdDirectPrivate(controller, "closeRequested")) {
+      $readableStreamCloseIfPossible($getByIdDirectPrivate(controller, "controlledReadableStream"));
+    } else if ($isReadableStreamDefaultController(controller)) {
       $readableStreamDefaultControllerCallPullIfNeeded(controller);
     } else if ($isReadableByteStreamController(controller)) {
       $readableByteStreamControllerCallPullIfNeeded(controller);
@@ -141,7 +139,7 @@ export function readMany(this: ReadableStreamDefaultReader): ReadableStreamDefau
     $resetQueue(queue);
 
     if ($getByIdDirectPrivate(controller, "closeRequested")) {
-      $readableStreamClose($getByIdDirectPrivate(controller, "controlledReadableStream"));
+      $readableStreamCloseIfPossible($getByIdDirectPrivate(controller, "controlledReadableStream"));
     } else if ($isReadableStreamDefaultController(controller)) {
       $readableStreamDefaultControllerCallPullIfNeeded(controller);
     } else if ($isReadableByteStreamController(controller)) {
@@ -160,8 +158,7 @@ export function readMany(this: ReadableStreamDefaultReader): ReadableStreamDefau
 }
 
 export function read(this) {
-  if (!$isReadableStreamDefaultReader(this))
-    return Promise.$reject($makeThisTypeError("ReadableStreamDefaultReader", "read"));
+  if (!$isReadableStreamDefaultReader(this)) return Promise.$reject($ERR_INVALID_THIS("ReadableStreamDefaultReader"));
   if (!$getByIdDirectPrivate(this, "ownerReadableStream"))
     return Promise.$reject(new TypeError("read() called on a reader owned by no readable stream"));
 
@@ -169,14 +166,11 @@ export function read(this) {
 }
 
 export function releaseLock(this) {
-  if (!$isReadableStreamDefaultReader(this)) throw $makeThisTypeError("ReadableStreamDefaultReader", "releaseLock");
+  if (!$isReadableStreamDefaultReader(this)) throw $ERR_INVALID_THIS("ReadableStreamDefaultReader");
 
   if (!$getByIdDirectPrivate(this, "ownerReadableStream")) return;
 
-  if ($getByIdDirectPrivate(this, "readRequests")?.isNotEmpty())
-    throw new TypeError("There are still pending read requests, cannot release the lock");
-
-  $readableStreamReaderGenericRelease(this);
+  $readableStreamDefaultReaderRelease(this);
 }
 
 $getter;

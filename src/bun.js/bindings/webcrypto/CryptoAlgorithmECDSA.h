@@ -40,6 +40,9 @@ public:
     static constexpr CryptoAlgorithmIdentifier s_identifier = CryptoAlgorithmIdentifier::ECDSA;
     static Ref<CryptoAlgorithm> create();
 
+    static ExceptionOr<Vector<uint8_t>> platformSign(const CryptoAlgorithmEcdsaParams&, const CryptoKeyEC&, const Vector<uint8_t>&);
+    static ExceptionOr<bool> platformVerify(const CryptoAlgorithmEcdsaParams&, const CryptoKeyEC&, const Vector<uint8_t>&, const Vector<uint8_t>&);
+
 private:
     CryptoAlgorithmECDSA() = default;
     CryptoAlgorithmIdentifier identifier() const final;
@@ -49,9 +52,6 @@ private:
     void generateKey(const CryptoAlgorithmParameters&, bool extractable, CryptoKeyUsageBitmap, KeyOrKeyPairCallback&&, ExceptionCallback&&, ScriptExecutionContext&) final;
     void importKey(CryptoKeyFormat, KeyData&&, const CryptoAlgorithmParameters&, bool extractable, CryptoKeyUsageBitmap, KeyCallback&&, ExceptionCallback&&) final;
     void exportKey(CryptoKeyFormat, Ref<CryptoKey>&&, KeyDataCallback&&, ExceptionCallback&&) final;
-
-    static ExceptionOr<Vector<uint8_t>> platformSign(const CryptoAlgorithmEcdsaParams&, const CryptoKeyEC&, const Vector<uint8_t>&);
-    static ExceptionOr<bool> platformVerify(const CryptoAlgorithmEcdsaParams&, const CryptoKeyEC&, const Vector<uint8_t>&, const Vector<uint8_t>&);
 };
 
 } // namespace WebCore

@@ -7,10 +7,10 @@ Bun implements the Web-standard [`TextDecoder`](https://developer.mozilla.org/en
 ```ts
 const arr = new Uint8Array([104, 101, 108, 108, 111]);
 const decoder = new TextDecoder();
-const str = decoder.decode(buf);
+const str = decoder.decode(arr);
 // => "hello"
 ```
 
 ---
 
-See [Docs > API > Binary Data](/docs/api/binary-data#conversion) for complete documentation on manipulating binary data with Bun.
+See [Docs > API > Binary Data](https://bun.sh/docs/api/binary-data#conversion) for complete documentation on manipulating binary data with Bun.

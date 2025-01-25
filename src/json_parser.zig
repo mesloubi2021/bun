@@ -1,5 +1,5 @@
 const std = @import("std");
-const logger = @import("root").bun.logger;
+const logger = bun.logger;
 const js_lexer = bun.js_lexer;
 const importRecord = @import("import_record.zig");
 const js_ast = bun.JSAst;
@@ -25,7 +25,7 @@ const ExprNodeIndex = js_ast.ExprNodeIndex;
 const ExprNodeList = js_ast.ExprNodeList;
 const StmtNodeList = js_ast.StmtNodeList;
 const BindingNodeList = js_ast.BindingNodeList;
-const assert = std.debug.assert;
+const assert = bun.assert;
 
 const LocRef = js_ast.LocRef;
 const S = js_ast.S;
@@ -34,13 +34,14 @@ const G = js_ast.G;
 const T = js_lexer.T;
 const E = js_ast.E;
 const Stmt = js_ast.Stmt;
-const Expr = js_ast.Expr;
+pub const Expr = js_ast.Expr;
 const Binding = js_ast.Binding;
 const Symbol = js_ast.Symbol;
 const Level = js_ast.Op.Level;
 const Op = js_ast.Op;
 const Scope = js_ast.Scope;
 const locModuleScope = logger.Loc.Empty;
+const Indentation = js_printer.Options.Indentation;
 
 const LEXER_DEBUGGER_WORKAROUND = false;
 
@@ -68,7 +69,7 @@ const HashMapPool = struct {
             }
         }
 
-        var new_node = default_allocator.create(LinkedList.Node) catch unreachable;
+        const new_node = default_allocator.create(LinkedList.Node) catch unreachable;
         new_node.* = LinkedList.Node{ .data = HashMap.initContext(default_allocator, IdentityContext{}) };
         return new_node;
     }
@@ -94,9 +95,9 @@ fn newExpr(t: anytype, loc: logger.Loc) Expr {
         if (comptime Type == E.Object) {
             for (t.properties.slice()) |prop| {
                 // json should never have an initializer set
-                std.debug.assert(prop.initializer == null);
-                std.debug.assert(prop.key != null);
-                std.debug.assert(prop.value != null);
+                bun.assert(prop.initializer == null);
+                bun.assert(prop.key != null);
+                bun.assert(prop.value != null);
             }
         }
     }
@@ -114,6 +115,7 @@ fn JSONLikeParser(comptime opts: js_lexer.JSONOptions) type {
         opts.ignore_trailing_escape_sequences,
         opts.json_warn_duplicate_keys,
         opts.was_originally_macro,
+        opts.guess_indentation,
     );
 }
 
@@ -125,6 +127,7 @@ fn JSONLikeParser_(
     comptime opts_ignore_trailing_escape_sequences: bool,
     comptime opts_json_warn_duplicate_keys: bool,
     comptime opts_was_originally_macro: bool,
+    comptime opts_guess_indentation: bool,
 ) type {
     const opts = js_lexer.JSONOptions{
         .is_json = opts_is_json,
@@ -134,6 +137,7 @@ fn JSONLikeParser_(
         .ignore_trailing_escape_sequences = opts_ignore_trailing_escape_sequences,
         .json_warn_duplicate_keys = opts_json_warn_duplicate_keys,
         .was_originally_macro = opts_was_originally_macro,
+        .guess_indentation = opts_guess_indentation,
     };
     return struct {
         const Lexer = js_lexer.NewLexer(if (LEXER_DEBUGGER_WORKAROUND) js_lexer.JSONOptions{} else opts);
@@ -186,7 +190,7 @@ fn JSONLikeParser_(
                     return newExpr(E.Null{}, loc);
                 },
                 .t_string_literal => {
-                    var str: E.String = p.lexer.toEString();
+                    var str: E.String = try p.lexer.toEString();
                     if (comptime force_utf8) {
                         str.toUTF8(p.allocator) catch unreachable;
                     }
@@ -246,13 +250,9 @@ fn JSONLikeParser_(
                     const DuplicateNodeType = comptime if (opts.json_warn_duplicate_keys) *HashMapPool.LinkedList.Node else void;
                     const HashMapType = comptime if (opts.json_warn_duplicate_keys) HashMapPool.HashMap else void;
 
-                    var duplicates_node: DuplicateNodeType = if (comptime opts.json_warn_duplicate_keys)
-                        HashMapPool.get(p.allocator)
-                    else {};
+                    var duplicates_node: DuplicateNodeType = if (comptime opts.json_warn_duplicate_keys) HashMapPool.get(p.allocator);
 
-                    var duplicates: HashMapType = if (comptime opts.json_warn_duplicate_keys)
-                        duplicates_node.data
-                    else {};
+                    var duplicates: HashMapType = if (comptime opts.json_warn_duplicate_keys) duplicates_node.data;
 
                     defer {
                         if (comptime opts.json_warn_duplicate_keys) {
@@ -275,9 +275,9 @@ fn JSONLikeParser_(
                         }
 
                         const str = if (comptime force_utf8)
-                            p.lexer.toUTF8EString()
+                            try p.lexer.toUTF8EString()
                         else
-                            p.lexer.toEString();
+                            try p.lexer.toEString();
 
                         const key_range = p.lexer.range();
                         const key = newExpr(str, key_range.loc);
@@ -290,7 +290,7 @@ fn JSONLikeParser_(
 
                             // Warn about duplicate keys
                             if (duplicate_get_or_put.found_existing) {
-                                p.log.addRangeWarningFmt(p.source(), key_range, p.allocator, "Duplicate key \"{s}\" in object literal", .{p.lexer.string_literal_slice}) catch unreachable;
+                                p.log.addRangeWarningFmt(p.source(), key_range, p.allocator, "Duplicate key \"{s}\" in object literal", .{try str.string(p.allocator)}) catch unreachable;
                             }
                         }
 
@@ -369,10 +369,13 @@ pub const PackageJSONVersionChecker = struct {
     has_found_name: bool = false,
     has_found_version: bool = false,
 
+    name_loc: logger.Loc = logger.Loc.Empty,
+
     const opts = if (LEXER_DEBUGGER_WORKAROUND) js_lexer.JSONOptions{} else js_lexer.JSONOptions{
         .is_json = true,
         .json_warn_duplicate_keys = false,
         .allow_trailing_commas = true,
+        .allow_comments = true,
     };
 
     pub fn init(allocator: std.mem.Allocator, source: *const logger.Source, log: *logger.Log) !Parser {
@@ -409,7 +412,7 @@ pub const PackageJSONVersionChecker = struct {
                 return newExpr(E.Null{}, loc);
             },
             .t_string_literal => {
-                var str: E.String = p.lexer.toEString();
+                const str: E.String = try p.lexer.toEString();
 
                 try p.lexer.next();
                 return newExpr(str, loc);
@@ -456,13 +459,14 @@ pub const PackageJSONVersionChecker = struct {
                         }
                     }
 
-                    const str = p.lexer.toEString();
+                    const str = try p.lexer.toEString();
                     const key_range = p.lexer.range();
 
                     const key = newExpr(str, key_range.loc);
                     try p.lexer.expect(.t_string_literal);
 
                     try p.lexer.expect(.t_colon);
+
                     const value = try p.parseExpr();
 
                     if (p.depth == 1) {
@@ -478,6 +482,7 @@ pub const PackageJSONVersionChecker = struct {
                                 bun.copy(u8, &p.found_name_buf, value.data.e_string.data[0..len]);
                                 p.found_name = p.found_name_buf[0..len];
                                 p.has_found_name = true;
+                                p.name_loc = value.loc;
                             } else if (!p.has_found_version and strings.eqlComptime(key.data.e_string.data, "version")) {
                                 const len = @min(
                                     value.data.e_string.data.len,
@@ -491,6 +496,7 @@ pub const PackageJSONVersionChecker = struct {
                     }
 
                     if (p.has_found_name and p.has_found_version) return newExpr(E.Missing{}, loc);
+
                     has_properties = true;
                 }
 
@@ -499,9 +505,6 @@ pub const PackageJSONVersionChecker = struct {
             },
             else => {
                 try p.lexer.unexpected();
-                if (comptime Environment.isDebug) {
-                    @breakpoint();
-                }
                 return error.ParserError;
             },
         }
@@ -573,11 +576,9 @@ pub fn toAST(
                     return Expr.init(js_ast.E.String, js_ast.E.String.init(value), logger.Loc.Empty);
                 }
 
-                var exprs = try allocator.alloc(Expr, value.len);
-                var i: usize = 0;
-                while (i < exprs.len) : (i += 1) {
-                    exprs[i] = try toAST(allocator, @TypeOf(value[i]), value[i]);
-                }
+                const exprs = try allocator.alloc(Expr, value.len);
+                for (exprs, 0..) |*ex, i| ex.* = try toAST(allocator, @TypeOf(value[i]), value[i]);
+
                 return Expr.init(js_ast.E.Array, js_ast.E.Array{ .items = exprs }, logger.Loc.Empty);
             },
             else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
@@ -587,11 +588,9 @@ pub fn toAST(
                 return Expr.init(js_ast.E.String, js_ast.E.String.init(value), logger.Loc.Empty);
             }
 
-            var exprs = try allocator.alloc(Expr, value.len);
-            var i: usize = 0;
-            while (i < exprs.len) : (i += 1) {
-                exprs[i] = try toAST(allocator, @TypeOf(value[i]), value[i]);
-            }
+            const exprs = try allocator.alloc(Expr, value.len);
+            for (exprs, 0..) |*ex, i| ex.* = try toAST(allocator, @TypeOf(value[i]), value[i]);
+
             return Expr.init(js_ast.E.Array, js_ast.E.Array{ .items = exprs }, logger.Loc.Empty);
         },
         .Struct => |Struct| {
@@ -705,10 +704,11 @@ var empty_array_data = Expr.Data{ .e_array = &empty_array };
 /// Parse JSON
 /// This leaves UTF-16 strings as UTF-16 strings
 /// The JavaScript Printer will handle escaping strings if necessary
-pub fn ParseJSON(
+pub fn parse(
     source: *const logger.Source,
     log: *logger.Log,
     allocator: std.mem.Allocator,
+    comptime force_utf8: bool,
 ) !Expr {
     var parser = try JSONParser.init(allocator, source.*, log);
     switch (source.contents.len) {
@@ -729,14 +729,15 @@ pub fn ParseJSON(
         else => {},
     }
 
-    return try parser.parseExpr(false, false);
+    return try parser.parseExpr(false, force_utf8);
 }
 
-/// Parse JSON
+/// Parse Package JSON
+/// Allow trailing commas & comments.
 /// This eagerly transcodes UTF-16 strings into UTF-8 strings
 /// Use this when the text may need to be reprinted to disk as JSON (and not as JavaScript)
 /// Eagerly converting UTF-8 to UTF-16 can cause a performance issue
-pub fn ParseJSONUTF8(
+pub fn parsePackageJSONUTF8(
     source: *const logger.Source,
     log: *logger.Log,
     allocator: std.mem.Allocator,
@@ -761,13 +762,111 @@ pub fn ParseJSONUTF8(
         else => {},
     }
 
-    var parser = try JSONParser.init(allocator, source.*, log);
-    std.debug.assert(parser.source().contents.len > 0);
+    var parser = try JSONLikeParser(.{
+        .is_json = true,
+        .allow_comments = true,
+        .allow_trailing_commas = true,
+    }).init(allocator, source.*, log);
+    bun.assert(parser.source().contents.len > 0);
 
     return try parser.parseExpr(false, true);
 }
 
-pub fn ParseJSONForMacro(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !Expr {
+const JsonResult = struct {
+    root: Expr,
+    indentation: Indentation = .{},
+};
+
+pub fn parsePackageJSONUTF8WithOpts(
+    source: *const logger.Source,
+    log: *logger.Log,
+    allocator: std.mem.Allocator,
+    comptime opts: js_lexer.JSONOptions,
+) !JsonResult {
+    const len = source.contents.len;
+
+    switch (len) {
+        // This is to be consisntent with how disabled JS files are handled
+        0 => {
+            return .{
+                .root = Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_object_data },
+            };
+        },
+        // This is a fast pass I guess
+        2 => {
+            if (strings.eqlComptime(source.contents[0..1], "\"\"") or strings.eqlComptime(source.contents[0..1], "''")) {
+                return .{ .root = Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_string_data } };
+            } else if (strings.eqlComptime(source.contents[0..1], "{}")) {
+                return .{ .root = Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_object_data } };
+            } else if (strings.eqlComptime(source.contents[0..1], "[]")) {
+                return .{ .root = Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_array_data } };
+            }
+        },
+        else => {},
+    }
+
+    var parser = try JSONLikeParser(opts).init(allocator, source.*, log);
+    bun.assert(parser.source().contents.len > 0);
+
+    const root = try parser.parseExpr(false, true);
+
+    return .{
+        .root = root,
+        .indentation = if (comptime opts.guess_indentation) parser.lexer.indent_info.guess else .{},
+    };
+}
+
+/// Parse Package JSON
+/// Allow trailing commas & comments.
+/// This eagerly transcodes UTF-16 strings into UTF-8 strings
+/// Use this when the text may need to be reprinted to disk as JSON (and not as JavaScript)
+/// Eagerly converting UTF-8 to UTF-16 can cause a performance issue
+pub fn parseUTF8(
+    source: *const logger.Source,
+    log: *logger.Log,
+    allocator: std.mem.Allocator,
+) !Expr {
+    return try parseUTF8Impl(source, log, allocator, false);
+}
+
+pub fn parseUTF8Impl(
+    source: *const logger.Source,
+    log: *logger.Log,
+    allocator: std.mem.Allocator,
+    comptime check_len: bool,
+) !Expr {
+    const len = source.contents.len;
+
+    switch (len) {
+        // This is to be consisntent with how disabled JS files are handled
+        0 => {
+            return Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_object_data };
+        },
+        // This is a fast pass I guess
+        2 => {
+            if (strings.eqlComptime(source.contents[0..1], "\"\"") or strings.eqlComptime(source.contents[0..1], "''")) {
+                return Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_string_data };
+            } else if (strings.eqlComptime(source.contents[0..1], "{}")) {
+                return Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_object_data };
+            } else if (strings.eqlComptime(source.contents[0..1], "[]")) {
+                return Expr{ .loc = logger.Loc{ .start = 0 }, .data = empty_array_data };
+            }
+        },
+        else => {},
+    }
+
+    var parser = try JSONParser.init(allocator, source.*, log);
+    bun.assert(parser.source().contents.len > 0);
+
+    const result = try parser.parseExpr(false, true);
+    if (comptime check_len) {
+        if (parser.lexer.end >= source.contents.len) return result;
+        try parser.lexer.unexpected();
+        return error.ParserError;
+    }
+    return result;
+}
+pub fn parseForMacro(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !Expr {
     switch (source.contents.len) {
         // This is to be consisntent with how disabled JS files are handled
         0 => {
@@ -802,7 +901,7 @@ pub const JSONParseResult = struct {
     };
 };
 
-pub fn ParseJSONForBundling(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !JSONParseResult {
+pub fn parseForBundling(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !JSONParseResult {
     switch (source.contents.len) {
         // This is to be consisntent with how disabled JS files are handled
         0 => {
@@ -831,7 +930,7 @@ pub fn ParseJSONForBundling(source: *const logger.Source, log: *logger.Log, allo
 
 // threadlocal var env_json_auto_quote_buffer: MutableString = undefined;
 // threadlocal var env_json_auto_quote_buffer_loaded: bool = false;
-pub fn ParseEnvJSON(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !Expr {
+pub fn parseEnvJSON(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !Expr {
     switch (source.contents.len) {
         // This is to be consisntent with how disabled JS files are handled
         0 => {
@@ -882,7 +981,7 @@ pub fn ParseEnvJSON(source: *const logger.Source, log: *logger.Log, allocator: s
     }
 }
 
-pub fn ParseTSConfig(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !Expr {
+pub fn parseTSConfig(source: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator, comptime force_utf8: bool) !Expr {
     switch (source.contents.len) {
         // This is to be consisntent with how disabled JS files are handled
         0 => {
@@ -903,7 +1002,7 @@ pub fn ParseTSConfig(source: *const logger.Source, log: *logger.Log, allocator: 
 
     var parser = try TSConfigParser.init(allocator, source.*, log);
 
-    return parser.parseExpr(false, true);
+    return parser.parseExpr(false, force_utf8);
 }
 
 const duplicateKeyJson = "{ \"name\": \"valid\", \"name\": \"invalid\" }";
@@ -912,8 +1011,8 @@ const js_printer = bun.js_printer;
 const renamer = @import("renamer.zig");
 const SymbolList = [][]Symbol;
 
-const Bundler = bun.Bundler;
-const ParseResult = bun.bundler.ParseResult;
+const Transpiler = bun.Transpiler;
+const ParseResult = bun.transpiler.ParseResult;
 fn expectPrintedJSON(_contents: string, expected: string) !void {
     Expr.Data.Store.create(default_allocator);
     Stmt.Data.Store.create(default_allocator);
@@ -931,15 +1030,15 @@ fn expectPrintedJSON(_contents: string, expected: string) !void {
         "source.json",
         contents,
     );
-    const expr = try ParseJSON(&source, &log, default_allocator);
+    const expr = try parse(&source, &log, default_allocator);
 
     if (log.msgs.items.len > 0) {
-        Global.panic("--FAIL--\nExpr {s}\nLog: {s}\n--FAIL--", .{ expr, log.msgs.items[0].data.text });
+        Output.panic("--FAIL--\nExpr {s}\nLog: {s}\n--FAIL--", .{ expr, log.msgs.items[0].data.text });
     }
 
-    var buffer_writer = try js_printer.BufferWriter.init(default_allocator);
+    const buffer_writer = try js_printer.BufferWriter.init(default_allocator);
     var writer = js_printer.BufferPrinter.init(buffer_writer);
-    const written = try js_printer.printJSON(@TypeOf(&writer), &writer, expr, &source);
+    const written = try js_printer.printJSON(@TypeOf(&writer), &writer, expr, &source, .{});
     var js = writer.ctx.buffer.list.items.ptr[0 .. written + 1];
 
     if (js.len > 1) {
@@ -953,30 +1052,4 @@ fn expectPrintedJSON(_contents: string, expected: string) !void {
     }
 
     try std.testing.expectEqualStrings(expected, js);
-}
-
-test "ParseJSON" {
-    try expectPrintedJSON("true", "true");
-    try expectPrintedJSON("false", "false");
-    try expectPrintedJSON("1", "1");
-    try expectPrintedJSON("10", "10");
-    try expectPrintedJSON("100", "100");
-    try expectPrintedJSON("100.1", "100.1");
-    try expectPrintedJSON("19.1", "19.1");
-    try expectPrintedJSON("19.12", "19.12");
-    try expectPrintedJSON("3.4159820837456", "3.4159820837456");
-    try expectPrintedJSON("-10000.25", "-10000.25");
-    try expectPrintedJSON("\"hi\"", "\"hi\"");
-    try expectPrintedJSON("{\"hi\": 1, \"hey\": \"200\", \"boom\": {\"yo\": true}}", "{\"hi\": 1, \"hey\": \"200\", \"boom\": {\"yo\": true } }");
-    try expectPrintedJSON("{\"hi\": \"hey\"}", "{\"hi\": \"hey\" }");
-    try expectPrintedJSON(
-        "{\"hi\": [\"hey\", \"yo\"]}",
-        \\{"hi": [
-        \\  "hey",
-        \\  "yo"
-        \\] }
-        ,
-    );
-
-    // TODO: emoji?
 }

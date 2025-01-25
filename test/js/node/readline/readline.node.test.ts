@@ -1,8 +1,8 @@
 // @ts-nocheck
-import readline from "node:readline";
-import { Writable, PassThrough } from "node:stream";
-import { EventEmitter } from "node:events";
 import { createTest } from "node-harness";
+import { EventEmitter } from "node:events";
+import readline from "node:readline";
+import { PassThrough, Writable } from "node:stream";
 const { beforeEach, describe, it, createDoneDotAll, createCallCheckCtx, assert } = createTest(import.meta.path);
 
 var {
@@ -90,9 +90,13 @@ describe("readline.clearScreenDown()", () => {
 
   it("should throw on invalid callback", () => {
     // Verify that clearScreenDown() throws on invalid callback.
-    assert.throws(() => {
+    expect(() => {
       readline.clearScreenDown(writable, null);
-    }, /ERR_INVALID_ARG_TYPE/);
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ERR_INVALID_ARG_TYPE",
+      }),
+    );
   });
 
   it("should that clearScreenDown() does not throw on null or undefined stream", done => {
@@ -138,9 +142,13 @@ describe("readline.clearLine()", () => {
 
   it("should throw on an invalid callback", () => {
     // Verify that clearLine() throws on invalid callback.
-    assert.throws(() => {
+    expect(() => {
       readline.clearLine(writable, 0, null);
-    }, /ERR_INVALID_ARG_TYPE/);
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ERR_INVALID_ARG_TYPE",
+      }),
+    );
   });
 
   it("should not throw on null or undefined stream", done => {
@@ -188,9 +196,13 @@ describe("readline.moveCursor()", () => {
 
   it("should throw on invalid callback", () => {
     // Verify that moveCursor() throws on invalid callback.
-    assert.throws(() => {
+    expect(() => {
       readline.moveCursor(writable, 1, 1, null);
-    }, /ERR_INVALID_ARG_TYPE/);
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ERR_INVALID_ARG_TYPE",
+      }),
+    );
   });
 
   it("should not throw on null or undefined stream", done => {
@@ -281,9 +293,13 @@ describe("readline.cursorTo()", () => {
 
   it("should throw on invalid callback", () => {
     // Verify that cursorTo() throws on invalid callback.
-    assert.throws(() => {
+    expect(() => {
       readline.cursorTo(writable, 1, 1, null);
-    }, /ERR_INVALID_ARG_TYPE/);
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ERR_INVALID_ARG_TYPE",
+      }),
+    );
   });
 
   it("should throw if x or y is NaN", () => {
@@ -467,7 +483,7 @@ describe("readline.Interface", () => {
   });
 
   it("should throw if historySize is not a positive number", () => {
-    ["not a number", -1, NaN, {}, true, Symbol(), null].forEach(historySize => {
+    ["not a number", {}, true, Symbol(), null].forEach(historySize => {
       assert.throws(
         () => {
           readline.createInterface({
@@ -476,10 +492,22 @@ describe("readline.Interface", () => {
           });
         },
         {
-          // TODO: Revert to Range error when properly implemented errors with multiple bases
-          // name: "RangeError",
           name: "TypeError",
-          code: "ERR_INVALID_ARG_VALUE",
+          code: "ERR_INVALID_ARG_TYPE",
+        },
+      );
+    });
+    [-1, NaN].forEach(historySize => {
+      assert.throws(
+        () => {
+          readline.createInterface({
+            input,
+            historySize,
+          });
+        },
+        {
+          name: "RangeError",
+          code: "ERR_OUT_OF_RANGE",
         },
       );
     });
@@ -1304,7 +1332,7 @@ describe("readline.Interface", () => {
     assert.strictEqual(getStringWidth("你好"), 4);
     assert.strictEqual(getStringWidth("안녕하세요"), 10);
     assert.strictEqual(getStringWidth("A\ud83c\ude00BC"), 5);
-    assert.strictEqual(getStringWidth("👨‍👩‍👦‍👦"), 8);
+    assert.strictEqual(getStringWidth("👨‍👩‍👦‍👦"), 2);
     assert.strictEqual(getStringWidth("🐕𐐷あ💻😀"), 9);
     // TODO(BridgeAR): This should have a width of 4.
     assert.strictEqual(getStringWidth("⓬⓪"), 2);
@@ -1878,6 +1906,23 @@ describe("readline.createInterface()", () => {
     );
 
     input.write("abc\n");
+  });
+
+  it("should support reading-in lines via for await...of loop", async () => {
+    const sampleTextBuffer = new Buffer.from("Line1\nLine2\nLine3\nLine4");
+    const bufferStream = new PassThrough();
+
+    const rl = readline.createInterface({
+      input: bufferStream,
+    });
+
+    process.nextTick(() => {
+      bufferStream.end(sampleTextBuffer);
+    });
+
+    const result = [];
+    for await (const line of rl) result.push(line);
+    expect(result).toEqual(["Line1", "Line2", "Line3", "Line4"]);
   });
 
   it("should respond to home and end sequences for common pttys ", () => {

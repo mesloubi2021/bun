@@ -3,13 +3,17 @@ export function main() {
   return $requireMap.$get(Bun.main);
 }
 
+$visibility = "Private";
 export function require(this: CommonJSModuleRecord, id: string) {
-  return $overridableRequire.$call(this, id);
+  // Do not use $tailCallForwardArguments here, it causes https://github.com/oven-sh/bun/issues/9225
+  return $overridableRequire.$apply(this, arguments);
 }
 
 // overridableRequire can be overridden by setting `Module.prototype.require`
+$overriddenName = "require";
+$visibility = "Private";
 export function overridableRequire(this: CommonJSModuleRecord, id: string) {
-  const existing = $requireMap.$get(id) || $requireMap.$get((id = $resolveSync(id, this.path, false)));
+  const existing = $requireMap.$get(id) || $requireMap.$get((id = $resolveSync(id, this.id, false)));
   if (existing) {
     // Scenario where this is necessary:
     //
@@ -47,7 +51,15 @@ export function overridableRequire(this: CommonJSModuleRecord, id: string) {
   // Note: we do not need to wrap this in a try/catch, if it throws the C++ code will
   // clear the module from the map.
   //
-  var out = this.$require(id, mod);
+  var out = this.$require(
+    id,
+    mod,
+    // did they pass a { type } object?
+    $argumentCount(),
+    // the object containing a "type" attribute, if they passed one
+    // maybe this will be "paths" in the future too.
+    arguments[1],
+  );
 
   // -1 means we need to lookup the module from the ESM registry.
   if (out === -1) {
@@ -64,9 +76,18 @@ export function overridableRequire(this: CommonJSModuleRecord, id: string) {
     // If we can pull out a ModuleNamespaceObject, let's do it.
     if (esm?.evaluated && (esm.state ?? 0) >= $ModuleReady) {
       const namespace = Loader.getModuleNamespaceObject(esm!.module);
-      return (mod.exports =
-        // if they choose a module
-        namespace.__esModule ? namespace : Object.create(namespace, { __esModule: { value: true } }));
+      // In Bun, when __esModule is not defined, it's a CustomAccessor on the prototype.
+      // Various libraries expect __esModule to be set when using ESM from require().
+      // We don't want to always inject the __esModule export into every module,
+      // And creating an Object wrapper causes the actual exports to not be own properties.
+      // So instead of either of those, we make it so that the __esModule property can be set at runtime.
+      // It only supports "true" and undefined. Anything non-truthy is treated as undefined.
+      // https://github.com/oven-sh/bun/issues/14411
+      if (namespace.__esModule === undefined) {
+        namespace.__esModule = true;
+      }
+
+      return (mod.exports = namespace);
     }
   }
 
@@ -74,10 +95,12 @@ export function overridableRequire(this: CommonJSModuleRecord, id: string) {
   return mod.exports;
 }
 
-export function requireResolve(this: string | { path: string }, id: string) {
-  return $resolveSync(id, typeof this === "string" ? this : this?.path, false);
+$visibility = "Private";
+export function requireResolve(this: string | { id: string }, id: string) {
+  return $resolveSync(id, typeof this === "string" ? this : this?.id, false);
 }
 
+$visibility = "Private";
 export function requireNativeModule(id: string) {
   let esm = Loader.registry.$get(id);
   if (esm?.evaluated && (esm.state ?? 0) >= $ModuleReady) {

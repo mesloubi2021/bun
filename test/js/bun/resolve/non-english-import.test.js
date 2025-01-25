@@ -1,6 +1,6 @@
 // We do not make these files imports in the codebase because non-ascii file paths can cause issues with git
 // Instead, we put them into a temporary directory and run them from there
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { bunEnv, bunExe } from "harness";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,7 +75,7 @@ test("latin1 & utf16 imports", async () => {
     mkdirSync(prefix, { recursive: true });
   } catch (e) {}
 
-  const entryCode = imports.map(i => `import "${i}";`).join("\n");
+  let entryCode = imports.map(i => `import ${JSON.stringify(i)};`).join("\n");
   await Bun.write(inputPath, entryCode);
 
   for (let importPath of imports) {

@@ -1,7 +1,7 @@
 import assert from "assert";
+import { describe, expect } from "bun:test";
 import { readdirSync } from "fs";
-import { itBundled, testForFile } from "../expectBundled";
-var { describe, test, expect } = testForFile(import.meta.path);
+import { itBundled } from "../expectBundled";
 
 // Tests ported from:
 // https://github.com/evanw/esbuild/blob/main/internal/bundler_tests/bundler_splitting_test.go
@@ -368,8 +368,8 @@ describe("bundler", () => {
           console.log('observer', getValue());
         }
         setObserver(observer);
-        import('./out/a.js');
-        import('./out/b.js');
+        await import('./out/a.js');
+        await import('./out/b.js');
       `,
     },
     run: [
@@ -541,14 +541,13 @@ describe("bundler", () => {
     },
   });
   itBundled("splitting/PublicPathEntryName", {
-    todo: true,
     files: {
       "/a.js": `import("./b")`,
       "/b.js": `console.log('b')`,
     },
     outdir: "/out",
     splitting: true,
-    publicPath: "/www",
+    publicPath: "/www/",
     onAfterBundle(api) {
       const t = new Bun.Transpiler();
       const imports = t.scanImports(api.readFile("/out/a.js"));

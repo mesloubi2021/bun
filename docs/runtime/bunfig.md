@@ -238,6 +238,17 @@ By default Bun uses caret ranges; if the `latest` version of a package is `2.4.1
 exact = false
 ```
 
+### `install.saveTextLockfile`
+
+If false, generate a binary `bun.lockb` instead of a text-based `bun.lock` file when running `bun install` and no lockfile is present.
+
+Default `true` (since Bun v1.2).
+
+```toml
+[install]
+saveTextLockfile = false
+```
+
 <!--
 ### `install.prefer`
 
@@ -298,13 +309,13 @@ Valid values are:
 ---
 
 - `"fallback"`
-- Check local `node_modules` first, the auto-install any packages that aren't found. You can enable this from the CLI with `bun -i`.
+- Check local `node_modules` first, then auto-install any packages that aren't found. You can enable this from the CLI with `bun -i`.
 
 {% /table %}
 
 ### `install.frozenLockfile`
 
-When true, `bun install` will not update `bun.lockb`. Default `false`. If `package.json` and the existing `bun.lockb` are not in agreement, this will error.
+When true, `bun install` will not update `bun.lock`. Default `false`. If `package.json` and the existing `bun.lock` are not in agreement, this will error.
 
 ```toml
 [install]
@@ -313,7 +324,7 @@ frozenLockfile = false
 
 ### `install.dryRun`
 
-Whether to install optional dependencies. Default `false`. When true, it's equivalent to setting `--dry-run` on all `bun install` commands.
+Whether `bun install` will actually install dependencies. Default `false`. When true, it's equivalent to setting `--dry-run` on all `bun install` commands.
 
 ```toml
 [install]
@@ -370,6 +381,19 @@ myorg = { username = "myusername", password = "$npm_password", url = "https://re
 myorg = { token = "$npm_token", url = "https://registry.myorg.com/" }
 ```
 
+### `install.ca` and `install.cafile`
+
+To configure a CA certificate, use `install.ca` or `install.cafile` to specify a path to a CA certificate file.
+
+```toml
+[install]
+# The CA certificate as a string
+ca = "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+
+# A path to a CA certificate file. The file can contain multiple certificates.
+cafile = "path/to/cafile"
+```
+
 ### `install.cache`
 
 To configure the cache behavior:
@@ -399,7 +423,7 @@ Whether to generate a lockfile on `bun install`. Default `true`.
 save = true
 ```
 
-Whether to generate a non-Bun lockfile alongside `bun.lockb`. (A `bun.lockb` will always be created.) Currently `"yarn"` is the only supported value.
+Whether to generate a non-Bun lockfile alongside `bun.lock`. (A `bun.lock` will always be created.) Currently `"yarn"` is the only supported value.
 
 ```toml
 [install.lockfile]
@@ -426,4 +450,94 @@ editor = "code"
 # - "nvim", "neovim"
 # - "vim","vi"
 # - "emacs"
-``` -->
+```
+-->
+
+## `bun run`
+
+The `bun run` command can be configured under the `[run]` section. These apply to the `bun run` command and the `bun` command when running a file or executable or script.
+
+Currently, `bunfig.toml` isn't always automatically loaded for `bun run` in a local project (it does check for a global `bunfig.toml`), so you might still need to pass `-c` or `-c=bunfig.toml` to use these settings.
+
+### `run.shell` - use the system shell or Bun's shell
+
+The shell to use when running package.json scripts via `bun run` or `bun`. On Windows, this defaults to `"bun"` and on other platforms it defaults to `"system"`.
+
+To always use the system shell instead of Bun's shell (default behavior unless Windows):
+
+```toml
+[run]
+# default outside of Windows
+shell = "system"
+```
+
+To always use Bun's shell instead of the system shell:
+
+```toml
+[run]
+# default on Windows
+shell = "bun"
+```
+
+### `run.bun` - auto alias `node` to `bun`
+
+When `true`, this prepends `$PATH` with a `node` symlink that points to the `bun` binary for all scripts or executables invoked by `bun run` or `bun`.
+
+This means that if you have a script that runs `node`, it will actually run `bun` instead, without needing to change your script. This works recursively, so if your script runs another script that runs `node`, it will also run `bun` instead. This applies to shebangs as well, so if you have a script with a shebang that points to `node`, it will actually run `bun` instead.
+
+By default, this is enabled if `node` is not already in your `$PATH`.
+
+```toml
+[run]
+# equivalent to `bun --bun` for all `bun run` commands
+bun = true
+```
+
+You can test this by running:
+
+```sh
+$ bun --bun which node # /path/to/bun
+$ bun which node # /path/to/node
+```
+
+This option is equivalent to prefixing all `bun run` commands with `--bun`:
+
+```sh
+bun --bun run dev
+bun --bun dev
+bun run --bun dev
+```
+
+If set to `false`, this will disable the `node` symlink.
+
+### `run.silent` - suppress reporting the command being run
+
+When `true`, suppresses the output of the command being run by `bun run` or `bun`.
+
+```toml
+[run]
+silent = true
+```
+
+Without this option, the command being run will be printed to the console:
+
+```sh
+$ bun run dev
+> $ echo "Running \"dev\"..."
+Running "dev"...
+```
+
+With this option, the command being run will not be printed to the console:
+
+```sh
+$ bun run dev
+Running "dev"...
+```
+
+This is equivalent to passing `--silent` to all `bun run` commands:
+
+```sh
+bun --silent run dev
+bun --silent dev
+bun run --silent dev
+```

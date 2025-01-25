@@ -49,6 +49,14 @@ private:
     HttpRouter<RouterData> router;
     void *upgradedWebSocket = nullptr;
     bool isParsingHttp = false;
+    bool rejectUnauthorized = false;
+
+    // TODO: SNI
+    void clearRoutes() {
+        this->router = HttpRouter<RouterData>{};
+        this->currentRouter = &router;
+        filterHandlers.clear();
+    }
 };
 
 }

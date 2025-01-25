@@ -1,19 +1,38 @@
 {
   "compilerOptions": {
+    "composite": true,
+
+    // Enable latest features
     "lib": ["ESNext"],
-    "module": "esnext",
-    "target": "esnext",
-    "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "strict": true,
-    "noImplicitAny": false,
-    "allowJs": true,
-    "downlevelIteration": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleDetection": "force",
     "jsx": "react-jsx",
-    "types": ["bun-types"],
-    "typeRoots": ["./packages"]
+    "allowJs": true,
+    "resolveJsonModule": true,
+
+    // Bundler mode
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    // TODO: enable this
+    // "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    // Best practices
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+
+    // Stricter type-checking
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false,
+    "noImplicitAny": false,
+    "noImplicitThis": false,
+
+    // Enable decorators
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   }
 }

@@ -3,7 +3,6 @@
 #include "root.h"
 #include "ActiveDOMObject.h"
 #include "ContextDestructionObserver.h"
-#include "BunBroadcastChannelRegistry.h"
 #include <wtf/CrossThreadTask.h>
 #include <wtf/Function.h>
 #include <wtf/HashSet.h>
@@ -12,16 +11,14 @@
 #include <wtf/text/WTFString.h>
 #include <wtf/CompletionHandler.h>
 #include "CachedScript.h"
-#include "wtf/URL.h"
+#include "wtf/ThreadSafeWeakPtr.h"
+#include <wtf/URL.h>
+#include <wtf/LazyRef.h>
 
 namespace uWS {
 template<bool isServer, bool isClient, typename UserData>
 struct WebSocketContext;
 }
-
-#ifndef ZIG_GLOBAL_OBJECT_DEFINED
-#include "ZigGlobalObject.h"
-#endif
 
 struct us_socket_t;
 struct us_socket_context_t;
@@ -30,71 +27,25 @@ struct us_loop_t;
 namespace WebCore {
 
 class WebSocket;
+class BunBroadcastChannelRegistry;
 class MessagePort;
 
 class ScriptExecutionContext;
-
-class EventLoopTask {
-    WTF_MAKE_ISO_ALLOCATED(EventLoopTask);
-
-public:
-    enum CleanupTaskTag { CleanupTask };
-
-    template<typename T, typename = typename std::enable_if<!std::is_base_of<EventLoopTask, T>::value && std::is_convertible<T, Function<void(ScriptExecutionContext&)>>::value>::type>
-    EventLoopTask(T task)
-        : m_task(WTFMove(task))
-        , m_isCleanupTask(false)
-    {
-    }
-
-    EventLoopTask(Function<void()>&& task)
-        : m_task([task = WTFMove(task)](ScriptExecutionContext&) { task(); })
-        , m_isCleanupTask(false)
-    {
-    }
-
-    template<typename T, typename = typename std::enable_if<std::is_convertible<T, Function<void(ScriptExecutionContext&)>>::value>::type>
-    EventLoopTask(CleanupTaskTag, T task)
-        : m_task(WTFMove(task))
-        , m_isCleanupTask(true)
-    {
-    }
-
-    void performTask(ScriptExecutionContext& context)
-    {
-        m_task(context);
-        delete this;
-    }
-    bool isCleanupTask() const { return m_isCleanupTask; }
-
-protected:
-    Function<void(ScriptExecutionContext&)> m_task;
-    bool m_isCleanupTask;
-};
+class EventLoopTask;
 
 using ScriptExecutionContextIdentifier = uint32_t;
+DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(ScriptExecutionContext);
 
-class ScriptExecutionContext : public CanMakeWeakPtr<ScriptExecutionContext> {
+class ScriptExecutionContext : public CanMakeWeakPtr<ScriptExecutionContext>, public RefCounted<ScriptExecutionContext> {
+#if ENABLE(MALLOC_BREAKDOWN)
+    WTF_MAKE_FAST_ALLOCATED_WITH_HEAP_IDENTIFIER(ScriptExecutionContext);
+#else
     WTF_MAKE_ISO_ALLOCATED(ScriptExecutionContext);
+#endif
 
 public:
-    ScriptExecutionContext(JSC::VM* vm, JSC::JSGlobalObject* globalObject)
-        : m_vm(vm)
-        , m_globalObject(globalObject)
-        , m_identifier(0)
-        , m_broadcastChannelRegistry(BunBroadcastChannelRegistry::create())
-    {
-        regenerateIdentifier();
-    }
-
-    ScriptExecutionContext(JSC::VM* vm, JSC::JSGlobalObject* globalObject, ScriptExecutionContextIdentifier identifier)
-        : m_vm(vm)
-        , m_globalObject(globalObject)
-        , m_identifier(identifier)
-        , m_broadcastChannelRegistry(BunBroadcastChannelRegistry::create())
-    {
-        addToContextsMap();
-    }
+    ScriptExecutionContext(JSC::VM* vm, JSC::JSGlobalObject* globalObject);
+    ScriptExecutionContext(JSC::VM* vm, JSC::JSGlobalObject* globalObject, ScriptExecutionContextIdentifier identifier);
 
     ~ScriptExecutionContext();
 
@@ -118,6 +69,8 @@ public:
     static ScriptExecutionContext* getScriptExecutionContext(ScriptExecutionContextIdentifier identifier);
     void refEventLoop();
     void unrefEventLoop();
+    using RefCounted::deref;
+    using RefCounted::ref;
 
     const WTF::URL& url() const
     {
@@ -169,33 +122,15 @@ public:
     void addToContextsMap();
     void removeFromContextsMap();
 
-    void postTaskConcurrently(Function<void(ScriptExecutionContext&)>&& lambda)
-    {
-        auto* task = new EventLoopTask(WTFMove(lambda));
-        reinterpret_cast<Zig::GlobalObject*>(m_globalObject)->queueTaskConcurrently(task);
-    }
+    void postTaskConcurrently(Function<void(ScriptExecutionContext&)>&& lambda);
     // Executes the task on context's thread asynchronously.
-    void postTask(Function<void(ScriptExecutionContext&)>&& lambda)
-    {
-        auto* task = new EventLoopTask(WTFMove(lambda));
-        reinterpret_cast<Zig::GlobalObject*>(m_globalObject)->queueTask(task);
-    }
+    void postTask(Function<void(ScriptExecutionContext&)>&& lambda);
     // Executes the task on context's thread asynchronously.
-    void postTask(EventLoopTask* task)
-    {
-        reinterpret_cast<Zig::GlobalObject*>(m_globalObject)->queueTask(task);
-    }
+    void postTask(EventLoopTask* task);
     // Executes the task on context's thread asynchronously.
-    void postTaskOnTimeout(EventLoopTask* task, Seconds timeout)
-    {
-        reinterpret_cast<Zig::GlobalObject*>(m_globalObject)->queueTaskOnTimeout(task, static_cast<int>(timeout.milliseconds()));
-    }
+    void postTaskOnTimeout(EventLoopTask* task, Seconds timeout);
     // Executes the task on context's thread asynchronously.
-    void postTaskOnTimeout(Function<void(ScriptExecutionContext&)>&& lambda, Seconds timeout)
-    {
-        auto* task = new EventLoopTask(WTFMove(lambda));
-        postTaskOnTimeout(task, timeout);
-    }
+    void postTaskOnTimeout(Function<void(ScriptExecutionContext&)>&& lambda, Seconds timeout);
 
     template<typename... Arguments>
     void postCrossThreadTask(Arguments&&... arguments)
@@ -215,7 +150,9 @@ public:
         m_vm = &globalObject->vm();
     }
 
-    BunBroadcastChannelRegistry& broadcastChannelRegistry() { return m_broadcastChannelRegistry; }
+    BunBroadcastChannelRegistry& broadcastChannelRegistry() { return m_broadcastChannelRegistry.get(*this); }
+
+    static ScriptExecutionContext* getMainThreadScriptExecutionContext();
 
 private:
     JSC::VM* m_vm = nullptr;
@@ -223,10 +160,10 @@ private:
     WTF::URL m_url = WTF::URL();
     ScriptExecutionContextIdentifier m_identifier;
 
-    HashSet<MessagePort*> m_messagePorts;
-    HashSet<ContextDestructionObserver*> m_destructionObservers;
+    UncheckedKeyHashSet<MessagePort*> m_messagePorts;
+    UncheckedKeyHashSet<ContextDestructionObserver*> m_destructionObservers;
     Vector<CompletionHandler<void()>> m_processMessageWithMessagePortsSoonHandlers;
-    Ref<BunBroadcastChannelRegistry> m_broadcastChannelRegistry;
+    LazyRef<ScriptExecutionContext, BunBroadcastChannelRegistry> m_broadcastChannelRegistry;
 
     bool m_willProcessMessageWithMessagePortsSoon { false };
 
@@ -259,6 +196,10 @@ public:
             return m_connected_client_websockets_ctx;
         }
     }
+
+#if ASSERT_ENABLED
+    bool m_inScriptExecutionContextDestructor = false;
+#endif
 };
 
 ScriptExecutionContext* executionContext(JSC::JSGlobalObject*);

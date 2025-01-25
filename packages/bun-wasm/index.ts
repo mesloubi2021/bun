@@ -19,9 +19,9 @@ export enum Loader {
   ts = BunLoader.ts,
 }
 export interface TestReference {
-  name: string,
-  byteOffset: number,
-  kind: 'test' | 'describe',
+  name: string;
+  byteOffset: number;
+  kind: "test" | "describe";
 }
 export type { ScanResult, TransformResponse };
 
@@ -66,25 +66,20 @@ const Wasi = {
     return Date.now();
   },
   environ_sizes_get() {
-    debugger;
     return 0;
   },
   environ_get(__environ: unknown, environ_buf: unknown) {
-    debugger;
     return 0;
   },
 
   fd_close(fd: number) {
-    debugger;
     return 0;
   },
   proc_exit() {},
 
   fd_seek(fd: number, offset_bigint: bigint, whence: unknown, newOffset: unknown) {
-    debugger;
   },
   fd_write(fd: unknown, iov: unknown, iovcnt: unknown, pnum: unknown) {
-    debugger;
   },
 };
 
@@ -176,7 +171,7 @@ export class Bun {
     return Bun.wasm_source.instance.exports.memory as WebAssembly.Memory;
   }
 
-  private static scratch: Uint8Array = new Uint8Array(8096);
+  private static scratch: Uint8Array = new Uint8Array(8192);
   private static memory_array: Uint8Array;
 
   private static _decoder: TextDecoder;
@@ -221,7 +216,7 @@ export class Bun {
     } else {
       const fs = await import("fs");
 
-      if (typeof url === 'string' && url.startsWith('file://')) {
+      if (typeof url === "string" && url.startsWith("file://")) {
         url = new URL(url); // fs.readFileSync cannot consume URL strings, only URL objects
       }
 
@@ -300,7 +295,7 @@ export class Bun {
           ),
         ),
         byteOffset: response.tests[i].byteOffset,
-        kind: testKindMap[response.tests[i].kind] as 'test' | 'describe',
+        kind: testKindMap[response.tests[i].kind] as "test" | "describe",
       };
     }
 
@@ -309,7 +304,11 @@ export class Bun {
     return tests;
   }
 
-  static transformSync(content: Uint8Array | string, file_name: string, loader?: keyof typeof Loader): TransformResponse {
+  static transformSync(
+    content: Uint8Array | string,
+    file_name: string,
+    loader?: keyof typeof Loader,
+  ): TransformResponse {
     const bb = new ByteBuffer(Bun.scratch);
     bb.length = 0;
     bb.index = 0;

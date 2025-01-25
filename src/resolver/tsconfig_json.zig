@@ -10,11 +10,10 @@ const default_allocator = bun.default_allocator;
 const C = bun.C;
 const std = @import("std");
 const options = @import("../options.zig");
-const logger = @import("root").bun.logger;
+const logger = bun.logger;
 const cache = @import("../cache.zig");
 const js_ast = bun.JSAst;
 const js_lexer = bun.js_lexer;
-const ComptimeStringMap = @import("../comptime_string_map.zig").ComptimeStringMap;
 
 // Heuristic: you probably don't have 100 of these
 // Probably like 5-10
@@ -58,6 +57,7 @@ pub const TSConfigJSON = struct {
 
     emit_decorator_metadata: bool = false,
 
+    pub usingnamespace bun.New(@This());
     pub fn hasBaseURL(tsconfig: *const TSConfigJSON) bool {
         return tsconfig.base_url.len > 0;
     }
@@ -68,10 +68,10 @@ pub const TSConfigJSON = struct {
         remove,
         invalid,
 
-        pub const List = ComptimeStringMap(ImportsNotUsedAsValue, .{
-            .{ "preserve", ImportsNotUsedAsValue.preserve },
-            .{ "error", ImportsNotUsedAsValue.err },
-            .{ "remove", ImportsNotUsedAsValue.remove },
+        pub const List = bun.ComptimeStringMap(ImportsNotUsedAsValue, .{
+            .{ "preserve", .preserve },
+            .{ "error", .err },
+            .{ "remove", .remove },
         });
     };
 
@@ -101,6 +101,51 @@ pub const TSConfigJSON = struct {
         return out;
     }
 
+    /// Support ${configDir}, but avoid allocating when possible.
+    ///
+    /// https://github.com/microsoft/TypeScript/issues/57485
+    ///
+    /// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-5.html#the-configdir-template-variable-for-configuration-files
+    ///
+    /// https://github.com/oven-sh/bun/issues/11752
+    ///
+    // Note that the way tsc does this is slightly different. They replace
+    // "${configDir}" with "./" and then convert it to an absolute path sometimes.
+    // We convert it to an absolute path during module resolution, so we shouldn't need to do that here.
+    // https://github.com/microsoft/TypeScript/blob/ef802b1e4ddaf8d6e61d6005614dd796520448f8/src/compiler/commandLineParser.ts#L3243-L3245
+    fn strReplacingTemplates(allocator: std.mem.Allocator, input: string, source: *const logger.Source) bun.OOM!string {
+        var remaining = input;
+        var string_builder = bun.StringBuilder{};
+        const configDir = source.path.sourceDir();
+
+        // There's only one template variable we support, so we can keep this simple for now.
+        while (strings.indexOf(remaining, "${configDir}")) |index| {
+            string_builder.count(remaining[0..index]);
+            string_builder.count(configDir);
+            remaining = remaining[index + "${configDir}".len ..];
+        }
+
+        // If we didn't find any template variables, return the original string without allocating.
+        if (remaining.len == input.len) {
+            return input;
+        }
+
+        string_builder.countZ(remaining);
+        try string_builder.allocate(allocator);
+
+        remaining = input;
+        while (strings.indexOf(remaining, "${configDir}")) |index| {
+            _ = string_builder.append(remaining[0..index]);
+            _ = string_builder.append(configDir);
+            remaining = remaining[index + "${configDir}".len ..];
+        }
+
+        // The extra null-byte here is unnecessary. But it's kind of nice in the debugger sometimes.
+        _ = string_builder.appendZ(remaining);
+
+        return string_builder.allocatedSlice()[0 .. string_builder.len - 1];
+    }
+
     pub fn parse(
         allocator: std.mem.Allocator,
         log: *logger.Log,
@@ -117,7 +162,9 @@ pub const TSConfigJSON = struct {
         // behavior may also be different).
         const json: js_ast.Expr = (json_cache.parseTSConfig(log, source, allocator) catch null) orelse return null;
 
-        var result: TSConfigJSON = TSConfigJSON{ .abs_path = source.key_path.text, .paths = PathsMap.init(allocator) };
+        bun.Analytics.Features.tsconfig += 1;
+
+        var result: TSConfigJSON = TSConfigJSON{ .abs_path = source.path.text, .paths = PathsMap.init(allocator) };
         errdefer allocator.free(result.paths);
         if (json.asProperty("extends")) |extends_value| {
             if (!source.path.isNodeModule()) {
@@ -134,7 +181,7 @@ pub const TSConfigJSON = struct {
             // Parse "baseUrl"
             if (compiler_opts.expr.asProperty("baseUrl")) |base_url_prop| {
                 if ((base_url_prop.expr.asString(allocator))) |base_url| {
-                    result.base_url = base_url;
+                    result.base_url = strReplacingTemplates(allocator, base_url, &source) catch return null;
                     has_base_url = true;
                 }
             }
@@ -165,7 +212,7 @@ pub const TSConfigJSON = struct {
             // https://www.typescriptlang.org/docs/handbook/jsx.html#basic-usages
             if (compiler_opts.expr.asProperty("jsx")) |jsx_prop| {
                 if (jsx_prop.expr.asString(allocator)) |str| {
-                    var str_lower = allocator.alloc(u8, str.len) catch unreachable;
+                    const str_lower = allocator.alloc(u8, str.len) catch unreachable;
                     defer allocator.free(str_lower);
                     _ = strings.copyLowercase(str, str_lower);
                     // - We don't support "preserve" yet
@@ -217,8 +264,18 @@ pub const TSConfigJSON = struct {
             }
 
             if (compiler_opts.expr.asProperty("moduleSuffixes")) |prefixes| {
-                if (!source.path.isNodeModule()) {
-                    log.addWarning(&source, prefixes.expr.loc, "moduleSuffixes is not supported yet") catch {};
+                if (!source.path.isNodeModule()) handle_module_prefixes: {
+                    var array = prefixes.expr.asArray() orelse break :handle_module_prefixes;
+                    while (array.next()) |*element| {
+                        if (element.asString(allocator)) |str| {
+                            if (str.len > 0) {
+                                // Only warn when there is actually content
+                                // Sometimes, people do "moduleSuffixes": [""]
+                                log.addWarning(&source, prefixes.loc, "moduleSuffixes is not supported yet") catch {};
+                                break :handle_module_prefixes;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -226,6 +283,9 @@ pub const TSConfigJSON = struct {
             if (compiler_opts.expr.asProperty("paths")) |paths_prop| {
                 switch (paths_prop.expr.data) {
                     .e_object => {
+                        defer {
+                            bun.Analytics.Features.tsconfig_paths += 1;
+                        }
                         var paths = paths_prop.expr.data.e_object;
                         result.base_url_for_paths = if (result.base_url.len > 0) result.base_url else ".";
                         result.paths = PathsMap.init(allocator);
@@ -269,7 +329,9 @@ pub const TSConfigJSON = struct {
                                         errdefer allocator.free(values);
                                         var count: usize = 0;
                                         for (array) |expr| {
-                                            if ((expr.asString(allocator))) |str| {
+                                            if ((expr.asString(allocator))) |str_| {
+                                                const str = strReplacingTemplates(allocator, str_, &source) catch return null;
+                                                errdefer allocator.free(str);
                                                 if (TSConfigJSON.isValidTSConfigPathPattern(
                                                     str,
                                                     log,
@@ -316,16 +378,10 @@ pub const TSConfigJSON = struct {
         }
 
         if (Environment.isDebug and has_base_url) {
-            std.debug.assert(result.base_url.len > 0);
+            assert(result.base_url.len > 0);
         }
 
-        var _result = allocator.create(TSConfigJSON) catch unreachable;
-        _result.* = result;
-
-        if (Environment.isDebug and has_base_url) {
-            std.debug.assert(_result.base_url.len > 0);
-        }
-        return _result;
+        return TSConfigJSON.new(result);
     }
 
     pub fn isValidTSConfigPathPattern(text: string, log: *logger.Log, source: *const logger.Source, loc: logger.Loc, allocator: std.mem.Allocator) bool {
@@ -438,3 +494,5 @@ pub const TSConfigJSON = struct {
         return false;
     }
 };
+
+const assert = bun.assert;

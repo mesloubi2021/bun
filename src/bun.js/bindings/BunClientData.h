@@ -13,16 +13,15 @@ class DOMWrapperWorld;
 #include "ExtendedDOMClientIsoSubspaces.h"
 #include "ExtendedDOMIsoSubspaces.h"
 #include "DOMIsoSubspaces.h"
-// #include "DOMWrapperWorld.h"
 #include "BunBuiltinNames.h"
 // #include "WebCoreJSBuiltins.h"
 // #include "WorkerThreadType.h"
-#include "wtf/Function.h"
-#include "wtf/HashSet.h"
-#include "wtf/RefPtr.h"
-#include "JavaScriptCore/WeakInlines.h"
-#include "JavaScriptCore/IsoSubspacePerVM.h"
-#include "wtf/StdLibExtras.h"
+#include <wtf/Function.h>
+#include <wtf/HashSet.h>
+#include <wtf/RefPtr.h>
+#include <JavaScriptCore/WeakInlines.h>
+#include <JavaScriptCore/IsoSubspacePerVM.h>
+#include <wtf/StdLibExtras.h>
 #include "WebCoreJSBuiltins.h"
 #include "JSCTaskScheduler.h"
 
@@ -59,6 +58,8 @@ public:
     }
 
     JSC::IsoHeapCellType m_heapCellTypeForJSWorkerGlobalScope;
+    JSC::IsoHeapCellType m_heapCellTypeForNodeVMGlobalObject;
+    JSC::IsoHeapCellType m_heapCellTypeForBakeGlobalObject;
 
 private:
     Lock m_lock;
@@ -77,7 +78,7 @@ class JSVMClientData : public JSC::VM::ClientData {
     WTF_MAKE_FAST_ALLOCATED;
 
 public:
-    explicit JSVMClientData(JSC::VM&);
+    explicit JSVMClientData(JSC::VM&, RefPtr<JSC::SourceProvider>);
 
     virtual ~JSVMClientData();
 
@@ -190,6 +191,11 @@ static inline BunBuiltinNames& builtinNames(JSC::VM& vm)
 }
 
 } // namespace WebCore
+
+inline void* bunVM(JSC::VM& vm)
+{
+    return WebCore::clientData(vm)->bunVM;
+}
 
 namespace WebCore {
 using JSVMClientData = WebCore::JSVMClientData;

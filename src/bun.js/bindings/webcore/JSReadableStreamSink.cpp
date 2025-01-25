@@ -120,7 +120,9 @@ void JSReadableStreamSink::finishCreation(VM& vm)
 
 JSObject* JSReadableStreamSink::createPrototype(VM& vm, JSDOMGlobalObject& globalObject)
 {
-    return JSReadableStreamSinkPrototype::create(vm, &globalObject, JSReadableStreamSinkPrototype::createStructure(vm, &globalObject, globalObject.objectPrototype()));
+    auto* structure = JSReadableStreamSinkPrototype::createStructure(vm, &globalObject, globalObject.objectPrototype());
+    structure->setMayBePrototype(true);
+    return JSReadableStreamSinkPrototype::create(vm, &globalObject, structure);
 }
 
 JSObject* JSReadableStreamSink::prototype(VM& vm, JSDOMGlobalObject& globalObject)
@@ -145,7 +147,7 @@ static inline JSC::EncodedJSValue jsReadableStreamSinkPrototypeFunction_enqueueB
         return throwVMError(lexicalGlobalObject, throwScope, createNotEnoughArgumentsError(lexicalGlobalObject));
     EnsureStillAliveScope argument0 = callFrame->uncheckedArgument(0);
     auto chunk = convert<IDLUnion<IDLArrayBufferView, IDLArrayBuffer>>(*lexicalGlobalObject, argument0.value());
-    RETURN_IF_EXCEPTION(throwScope, encodedJSValue());
+    RETURN_IF_EXCEPTION(throwScope, {});
     RELEASE_AND_RETURN(throwScope, JSValue::encode(toJS<IDLUndefined>(*lexicalGlobalObject, throwScope, [&]() -> decltype(auto) { return impl.enqueue(WTFMove(chunk)); })));
 }
 
@@ -180,7 +182,7 @@ static inline JSC::EncodedJSValue jsReadableStreamSinkPrototypeFunction_errorBod
         return throwVMError(lexicalGlobalObject, throwScope, createNotEnoughArgumentsError(lexicalGlobalObject));
     EnsureStillAliveScope argument0 = callFrame->uncheckedArgument(0);
     auto message = convert<IDLDOMString>(*lexicalGlobalObject, argument0.value());
-    RETURN_IF_EXCEPTION(throwScope, encodedJSValue());
+    RETURN_IF_EXCEPTION(throwScope, {});
     RELEASE_AND_RETURN(throwScope, JSValue::encode(toJS<IDLUndefined>(*lexicalGlobalObject, throwScope, [&]() -> decltype(auto) { return impl.error(WTFMove(message)); })));
 }
 
@@ -204,11 +206,11 @@ void JSReadableStreamSink::analyzeHeap(JSCell* cell, HeapAnalyzer& analyzer)
     auto* thisObject = jsCast<JSReadableStreamSink*>(cell);
     analyzer.setWrappedObjectForCell(cell, &thisObject->wrapped());
     if (thisObject->scriptExecutionContext())
-        analyzer.setLabelForCell(cell, "url " + thisObject->scriptExecutionContext()->url().string());
+        analyzer.setLabelForCell(cell, makeString("url "_s, thisObject->scriptExecutionContext()->url().string()));
     Base::analyzeHeap(cell, analyzer);
 }
 
-bool JSReadableStreamSinkOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, AbstractSlotVisitor& visitor, const char** reason)
+bool JSReadableStreamSinkOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, AbstractSlotVisitor& visitor, ASCIILiteral* reason)
 {
     UNUSED_PARAM(handle);
     UNUSED_PARAM(visitor);

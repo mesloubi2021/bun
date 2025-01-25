@@ -16,8 +16,6 @@ const Schema = @import("./api/schema.zig");
 const Ref = @import("ast/base.zig").Ref;
 const JSAst = bun.JSAst;
 const content = @import("root").content;
-// packages/bun-cli-*/bun
-const BUN_ROOT = "../../";
 
 const Api = Schema.Api;
 fn embedDebugFallback(comptime msg: []const u8, comptime code: []const u8) []const u8 {
@@ -31,52 +29,8 @@ fn embedDebugFallback(comptime msg: []const u8, comptime code: []const u8) []con
 
     return code;
 }
-pub const ErrorCSS = struct {
-    pub inline fn sourceContent() string {
-        if (comptime Environment.isDebug) {
-            var out_buffer: [bun.MAX_PATH_BYTES]u8 = undefined;
-            var dirname = std.fs.selfExeDirPath(&out_buffer) catch unreachable;
-            var paths = [_]string{ dirname, BUN_ROOT, content.error_css_path };
-            const file = std.fs.cwd().openFile(
-                resolve_path.joinAbsString(dirname, &paths, .auto),
-                .{ .mode = .read_only },
-            ) catch return embedDebugFallback(
-                "Missing packages/bun-error/bun-error.css. Please run \"make bun_error\"",
-                content.error_css,
-            );
-            defer file.close();
-            return file.readToEndAlloc(default_allocator, file.getEndPos() catch 0) catch unreachable;
-        } else {
-            return content.error_css;
-        }
-    }
-};
-
-pub const ReactRefresh = @embedFile("./react-refresh.js");
-
-pub const ErrorJS = struct {
-    pub inline fn sourceContent() string {
-        if (comptime Environment.isDebug) {
-            var out_buffer: [bun.MAX_PATH_BYTES]u8 = undefined;
-            var dirname = std.fs.selfExeDirPath(&out_buffer) catch unreachable;
-            var paths = [_]string{ dirname, BUN_ROOT, content.error_js_path };
-            const file = std.fs.cwd().openFile(
-                resolve_path.joinAbsString(dirname, &paths, .auto),
-                .{ .mode = .read_only },
-            ) catch return embedDebugFallback(
-                "Missing " ++ content.error_js_path ++ ". Please run \"make bun_error\"",
-                content.error_js,
-            );
-            defer file.close();
-            return file.readToEndAlloc(default_allocator, file.getEndPos() catch 0) catch unreachable;
-        } else {
-            return content.error_js;
-        }
-    }
-};
 
 pub const Fallback = struct {
-    pub const ProdSourceContent = @embedFile("./fallback.out.js");
     pub const HTMLTemplate = @embedFile("./fallback.html");
     pub const HTMLBackendTemplate = @embedFile("./fallback-backend.html");
 
@@ -86,7 +40,7 @@ pub const Fallback = struct {
         pub fn format(this: Base64FallbackMessage, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             var bb = std.ArrayList(u8).init(this.allocator);
             defer bb.deinit();
-            var bb_writer = bb.writer();
+            const bb_writer = bb.writer();
             const Encoder = Schema.Writer(@TypeOf(bb_writer));
             var encoder = Encoder.init(bb_writer);
             this.msg.encode(&encoder) catch {};
@@ -115,29 +69,27 @@ pub const Fallback = struct {
         };
     };
 
-    pub inline fn scriptContent() string {
-        if (comptime Environment.isDebug) {
-            var dirpath = comptime bun.Environment.base_path ++ std.fs.path.dirname(@src().file).?;
-            var env = std.process.getEnvMap(default_allocator) catch unreachable;
-
-            const dir = std.mem.replaceOwned(
-                u8,
-                default_allocator,
-                dirpath,
-                "jarred",
-                env.get("USER").?,
-            ) catch unreachable;
-            var runtime_path = std.fs.path.join(default_allocator, &[_]string{ dir, "fallback.out.js" }) catch unreachable;
-            const file = std.fs.openFileAbsolute(runtime_path, .{}) catch return embedDebugFallback(
-                "Missing bun/src/fallback.out.js. " ++ "Please run \"make fallback_decoder\"",
-                ProdSourceContent,
-            );
-            defer file.close();
-            return file.readToEndAlloc(default_allocator, file.getEndPos() catch 0) catch unreachable;
-        } else {
-            return ProdSourceContent;
-        }
+    pub inline fn errorJS() string {
+        return if (Environment.codegen_embed)
+            @embedFile("bun-error/index.js")
+        else
+            bun.runtimeEmbedFile(.codegen, "bun-error/index.js");
     }
+
+    pub inline fn errorCSS() string {
+        return if (Environment.codegen_embed)
+            @embedFile("bun-error/bun-error.css")
+        else
+            bun.runtimeEmbedFile(.codegen, "bun-error/bun-error.css");
+    }
+
+    pub inline fn fallbackDecoderJS() string {
+        return if (Environment.codegen_embed)
+            @embedFile("fallback-decoder.js")
+        else
+            bun.runtimeEmbedFile(.codegen, "fallback-decoder.js");
+    }
+
     pub const version_hash = @import("build_options").fallback_html_version;
     var version_hash_int: u32 = 0;
     pub fn versionHash() u32 {
@@ -168,7 +120,7 @@ pub const Fallback = struct {
         try writer.print(HTMLTemplate, PrintArgs{
             .blob = Base64FallbackMessage{ .msg = msg, .allocator = allocator },
             .preload = preload,
-            .fallback = scriptContent(),
+            .fallback = fallbackDecoderJS(),
             .entry_point = entry_point,
         });
     }
@@ -188,93 +140,40 @@ pub const Fallback = struct {
         };
         try writer.print(HTMLBackendTemplate, PrintArgs{
             .blob = Base64FallbackMessage{ .msg = msg, .allocator = allocator },
-            .bun_error_css = ErrorCSS.sourceContent(),
-            .bun_error = ErrorJS.sourceContent(),
+            .bun_error_css = errorCSS(),
+            .bun_error = errorJS(),
             .bun_error_page_css = "",
-            .fallback = scriptContent(),
+            .fallback = fallbackDecoderJS(),
         });
     }
 };
 
 pub const Runtime = struct {
-    pub const ProdSourceContent = @embedFile("./runtime.out.js");
-    pub const ProdSourceContentNode = @embedFile("./runtime.node.out.js");
-    pub const ProdSourceContentBun = @embedFile("./runtime.bun.out.js");
-    pub const ProdSourceContentWithRefresh = @embedFile("./runtime.out.refresh.js");
-
-    pub inline fn sourceContentWithoutRefresh() string {
-        if (comptime Environment.isDebug) {
-            var dirpath = comptime bun.Environment.base_path ++ std.fs.path.dirname(@src().file).?;
-            var env = std.process.getEnvMap(default_allocator) catch unreachable;
-
-            const dir = std.mem.replaceOwned(
-                u8,
-                default_allocator,
-                dirpath,
-                "jarred",
-                env.get("USER").?,
-            ) catch unreachable;
-            var runtime_path = std.fs.path.join(default_allocator, &[_]string{ dir, "runtime.out.js" }) catch unreachable;
-            const file = std.fs.openFileAbsolute(runtime_path, .{}) catch return embedDebugFallback(
-                "Missing bun/src/runtime.out.js. " ++ "Please run \"make runtime_js_dev\"",
-                ProdSourceContent,
-            );
-            defer file.close();
-            return file.readToEndAlloc(default_allocator, file.getEndPos() catch 0) catch unreachable;
-        } else {
-            return ProdSourceContent;
-        }
+    pub fn sourceCode() string {
+        return if (Environment.codegen_embed)
+            @embedFile("runtime.out.js")
+        else
+            bun.runtimeEmbedFile(.codegen, "runtime.out.js");
     }
 
-    pub inline fn sourceContent(with_refresh: bool) string {
-        if (with_refresh) return sourceContentWithRefresh();
-        return sourceContentWithoutRefresh();
-    }
-
-    pub inline fn sourceContentNode() string {
-        return ProdSourceContentNode;
-    }
-
-    pub inline fn sourceContentBun() string {
-        return ProdSourceContentBun;
-    }
-
-    pub inline fn sourceContentWithRefresh() string {
-        if (comptime Environment.isDebug) {
-            var dirpath = comptime bun.Environment.base_path ++ std.fs.path.dirname(@src().file).?;
-            var env = std.process.getEnvMap(default_allocator) catch unreachable;
-
-            const dir = std.mem.replaceOwned(
-                u8,
-                default_allocator,
-                dirpath,
-                "jarred",
-                env.get("USER").?,
-            ) catch unreachable;
-            var runtime_path = std.fs.path.join(default_allocator, &[_]string{ dir, "runtime.out.refresh.js" }) catch unreachable;
-            const file = std.fs.openFileAbsolute(runtime_path, .{}) catch return embedDebugFallback(
-                "Missing bun/src/runtime.out.refresh.js. " ++ "Please run \"make runtime_js_dev\"",
-                ProdSourceContentWithRefresh,
-            );
-            defer file.close();
-            return file.readToEndAlloc(default_allocator, file.getEndPos() catch 0) catch unreachable;
-        } else {
-            return ProdSourceContentWithRefresh;
-        }
-    }
-
-    pub const version_hash = @import("build_options").runtime_js_version;
-    var version_hash_int: u32 = 0;
     pub fn versionHash() u32 {
-        if (version_hash_int == 0) {
-            version_hash_int = @as(u32, @truncate(version_hash));
-        }
-        return version_hash_int;
+        const hash = bun.Wyhash11.hash(0, sourceCode());
+        return @truncate(hash);
     }
 
     pub const Features = struct {
+        /// Enable the React Fast Refresh transform. What this does exactly
+        /// is documented in js_parser, search for `const ReactRefresh`
         react_fast_refresh: bool = false,
+        /// `hot_module_reloading` is specific to if we are using bun.bake.DevServer.
+        /// It can be enabled on the command line with --format=internal_bake_dev
+        ///
+        /// Standalone usage of this flag / usage of this flag
+        /// without '--format' set is an unsupported use case.
         hot_module_reloading: bool = false,
+        /// Control how the parser handles server components and server functions.
+        server_components: ServerComponentsMode = .none,
+
         is_macro_runtime: bool = false,
         top_level_await: bool = false,
         auto_import_jsx: bool = false,
@@ -293,30 +192,18 @@ pub const Runtime = struct {
 
         set_breakpoint_on_first_line: bool = false,
 
-        /// Instead of jsx("div", {}, void 0)
-        /// ->
-        /// {
-        ///    "type": "div",
-        ///    "props": {},
-        ///    "children": [],
-        ///    key: void 0,
-        ///   $$typeof: Symbol.for("react.element"),
-        /// }
-        /// See also https://github.com/babel/babel/commit/3cad2872335e2130f2ff6335027617ebbe9b5a46
-        /// See also https://github.com/babel/babel/pull/2972
-        /// See also https://github.com/facebook/react/issues/5138
-        jsx_optimization_inline: bool = false,
-        jsx_optimization_hoist: bool = false,
-
         trim_unused_imports: bool = false,
-        should_fold_typescript_constant_expressions: bool = false,
 
-        /// Use `import.meta.require()` instead of require()?
-        /// This is only supported in Bun.
-        dynamic_require: bool = false,
+        /// Allow runtime usage of require(), converting `require` into `__require`
+        auto_polyfill_require: bool = false,
 
         replace_exports: ReplaceableExport.Map = .{},
 
+        /// Scan for '// @bun' at the top of this file, halting a parse if it is
+        /// seen. This is used in `bun run` after a `bun build --target=bun`,
+        /// and you know the contents is already correct.
+        ///
+        /// This comment must never be used manually.
         dont_bundle_twice: bool = false,
 
         /// This is a list of packages which even when require() is used, we will
@@ -328,8 +215,48 @@ pub const Runtime = struct {
         unwrap_commonjs_packages: []const string = &.{},
 
         commonjs_at_runtime: bool = false,
+        unwrap_commonjs_to_esm: bool = false,
 
         emit_decorator_metadata: bool = false,
+
+        /// If true and if the source is transpiled as cjs, don't wrap the module.
+        /// This is used for `--print` entry points so we can get the result.
+        remove_cjs_module_wrapper: bool = false,
+
+        runtime_transpiler_cache: ?*bun.JSC.RuntimeTranspilerCache = null,
+
+        // TODO: make this a bitset of all unsupported features
+        lower_using: bool = true,
+
+        const hash_fields_for_runtime_transpiler = .{
+            .top_level_await,
+            .auto_import_jsx,
+            .allow_runtime,
+            .inlining,
+            .commonjs_named_exports,
+            .minify_syntax,
+            .minify_identifiers,
+            .dead_code_elimination,
+            .set_breakpoint_on_first_line,
+            .trim_unused_imports,
+            .dont_bundle_twice,
+            .commonjs_at_runtime,
+            .emit_decorator_metadata,
+            .lower_using,
+
+            // note that we do not include .inject_jest_globals, as we bail out of the cache entirely if this is true
+        };
+
+        pub fn hashForRuntimeTranspiler(this: *const Features, hasher: *std.hash.Wyhash) void {
+            bun.assert(this.runtime_transpiler_cache != null);
+
+            var bools: [std.meta.fieldNames(@TypeOf(hash_fields_for_runtime_transpiler)).len]bool = undefined;
+            inline for (hash_fields_for_runtime_transpiler, 0..) |field, i| {
+                bools[i] = @field(this, @tagName(field));
+            }
+
+            hasher.update(std.mem.asBytes(&bools));
+        }
 
         pub fn shouldUnwrapRequire(this: *const Features, package_name: string) bool {
             return package_name.len > 0 and strings.indexEqualAny(this.unwrap_commonjs_packages, package_name) != null;
@@ -345,64 +272,72 @@ pub const Runtime = struct {
 
             pub const Map = bun.StringArrayHashMapUnmanaged(ReplaceableExport);
         };
+
+        pub const ServerComponentsMode = enum {
+            /// Server components is disabled, strings "use client" and "use server" mean nothing.
+            none,
+            /// This is a server-side file outside of the SSR graph, but not a "use server" file.
+            /// - Handle functions with "use server", creating secret exports for them.
+            wrap_anon_server_functions,
+            /// This is a "use client" file on the server, and separate_ssr_graph is off.
+            /// - Wrap all exports in a call to `registerClientReference`
+            /// - Ban "use server" functions???
+            wrap_exports_for_client_reference,
+            /// This is a "use server" file on the server
+            /// - Wrap all exports in a call to `registerServerReference`
+            /// - Ban "use server" functions, since this directive is already applied.
+            wrap_exports_for_server_reference,
+            /// This is a client side file.
+            /// - Ban "use server" functions since it is on the client-side
+            client_side,
+
+            pub fn wrapsExports(mode: ServerComponentsMode) bool {
+                return switch (mode) {
+                    .wrap_exports_for_client_reference,
+                    .wrap_exports_for_server_reference,
+                    => true,
+                    else => false,
+                };
+            }
+        };
     };
 
     pub const Names = struct {
         pub const ActivateFunction = "activate";
     };
 
-    pub const GeneratedSymbol = struct {
-        primary: Ref,
-        backup: Ref,
-        ref: Ref,
-    };
-
-    // If you change this, remember to update "runtime.footer.js" and rebuild the runtime.js
+    // If you change this, remember to update "runtime.js"
     pub const Imports = struct {
-        __name: ?GeneratedSymbol = null,
-        __toModule: ?GeneratedSymbol = null,
-        __cJS2eSM: ?GeneratedSymbol = null,
-        __require: ?GeneratedSymbol = null,
-        __export: ?GeneratedSymbol = null,
-        __reExport: ?GeneratedSymbol = null,
-        __load: ?GeneratedSymbol = null,
-        @"$$m": ?GeneratedSymbol = null,
-        @"$$lzy": ?GeneratedSymbol = null,
-        __HMRModule: ?GeneratedSymbol = null,
-        __HMRClient: ?GeneratedSymbol = null,
-        __FastRefreshModule: ?GeneratedSymbol = null,
-        __exportValue: ?GeneratedSymbol = null,
-        __exportDefault: ?GeneratedSymbol = null,
-        __FastRefreshRuntime: ?GeneratedSymbol = null,
-        __merge: ?GeneratedSymbol = null,
-        __legacyDecorateClassTS: ?GeneratedSymbol = null,
-        __legacyDecorateParamTS: ?GeneratedSymbol = null,
-        __legacyMetadataTS: ?GeneratedSymbol = null,
-        @"$$typeof": ?GeneratedSymbol = null,
+        __name: ?Ref = null,
+        __require: ?Ref = null,
+        __export: ?Ref = null,
+        __reExport: ?Ref = null,
+        __exportValue: ?Ref = null,
+        __exportDefault: ?Ref = null,
+        // __refreshRuntime: ?GeneratedSymbol = null,
+        // __refreshSig: ?GeneratedSymbol = null, // $RefreshSig$
+        __merge: ?Ref = null,
+        __legacyDecorateClassTS: ?Ref = null,
+        __legacyDecorateParamTS: ?Ref = null,
+        __legacyMetadataTS: ?Ref = null,
+        @"$$typeof": ?Ref = null,
+        __using: ?Ref = null,
+        __callDispose: ?Ref = null,
 
         pub const all = [_][]const u8{
-            // __HMRClient goes first
-            // This is so we can call Bun.activate(true) as soon as possible
-            "__HMRClient",
             "__name",
-            "__toModule",
             "__require",
-            "__cJS2eSM",
             "__export",
             "__reExport",
-            "__load",
-            "$$m",
-            "$$lzy",
-            "__HMRModule",
-            "__FastRefreshModule",
             "__exportValue",
             "__exportDefault",
-            "__FastRefreshRuntime",
             "__merge",
             "__legacyDecorateClassTS",
             "__legacyDecorateParamTS",
             "__legacyMetadataTS",
             "$$typeof",
+            "__using",
+            "__callDispose",
         };
         const all_sorted: [all.len]string = brk: {
             @setEvalBranchQuota(1000000);
@@ -412,7 +347,7 @@ pub const Runtime = struct {
                     return std.mem.order(u8, a, b) == .lt;
                 }
             };
-            std.sort.block(string, &list, {}, Sorter.compare);
+            std.sort.pdq(string, &list, {}, Sorter.compare);
             break :brk list;
         };
 
@@ -420,7 +355,7 @@ pub const Runtime = struct {
         /// This is a lookup table so we don't need to resort the strings each time
         pub const all_sorted_index = brk: {
             var out: [all.len]usize = undefined;
-            inline for (all, 0..) |name, i| {
+            for (all, 0..) |name, i| {
                 for (all_sorted, 0..) |cmp, j| {
                     if (strings.eqlComptime(name, cmp)) {
                         out[i] = j;
@@ -450,104 +385,9 @@ pub const Runtime = struct {
                     defer this.i += 1;
 
                     switch (this.i) {
-                        0 => {
-                            if (@field(this.runtime_imports, all[0])) |val| {
-                                return Entry{ .key = 0, .value = val.ref };
-                            }
-                        },
-                        1 => {
-                            if (@field(this.runtime_imports, all[1])) |val| {
-                                return Entry{ .key = 1, .value = val.ref };
-                            }
-                        },
-                        2 => {
-                            if (@field(this.runtime_imports, all[2])) |val| {
-                                return Entry{ .key = 2, .value = val.ref };
-                            }
-                        },
-                        3 => {
-                            if (@field(this.runtime_imports, all[3])) |val| {
-                                return Entry{ .key = 3, .value = val.ref };
-                            }
-                        },
-                        4 => {
-                            if (@field(this.runtime_imports, all[4])) |val| {
-                                return Entry{ .key = 4, .value = val.ref };
-                            }
-                        },
-                        5 => {
-                            if (@field(this.runtime_imports, all[5])) |val| {
-                                return Entry{ .key = 5, .value = val.ref };
-                            }
-                        },
-                        6 => {
-                            if (@field(this.runtime_imports, all[6])) |val| {
-                                return Entry{ .key = 6, .value = val.ref };
-                            }
-                        },
-                        7 => {
-                            if (@field(this.runtime_imports, all[7])) |val| {
-                                return Entry{ .key = 7, .value = val.ref };
-                            }
-                        },
-                        8 => {
-                            if (@field(this.runtime_imports, all[8])) |val| {
-                                return Entry{ .key = 8, .value = val.ref };
-                            }
-                        },
-                        9 => {
-                            if (@field(this.runtime_imports, all[9])) |val| {
-                                return Entry{ .key = 9, .value = val.ref };
-                            }
-                        },
-                        10 => {
-                            if (@field(this.runtime_imports, all[10])) |val| {
-                                return Entry{ .key = 10, .value = val.ref };
-                            }
-                        },
-                        11 => {
-                            if (@field(this.runtime_imports, all[11])) |val| {
-                                return Entry{ .key = 11, .value = val.ref };
-                            }
-                        },
-                        12 => {
-                            if (@field(this.runtime_imports, all[12])) |val| {
-                                return Entry{ .key = 12, .value = val.ref };
-                            }
-                        },
-                        13 => {
-                            if (@field(this.runtime_imports, all[13])) |val| {
-                                return Entry{ .key = 13, .value = val.ref };
-                            }
-                        },
-                        14 => {
-                            if (@field(this.runtime_imports, all[14])) |val| {
-                                return Entry{ .key = 14, .value = val.ref };
-                            }
-                        },
-                        15 => {
-                            if (@field(this.runtime_imports, all[15])) |val| {
-                                return Entry{ .key = 15, .value = val.ref };
-                            }
-                        },
-                        16 => {
-                            if (@field(this.runtime_imports, all[16])) |val| {
-                                return Entry{ .key = 16, .value = val.ref };
-                            }
-                        },
-                        17 => {
-                            if (@field(this.runtime_imports, all[17])) |val| {
-                                return Entry{ .key = 17, .value = val.ref };
-                            }
-                        },
-                        18 => {
-                            if (@field(this.runtime_imports, all[18])) |val| {
-                                return Entry{ .key = 18, .value = val.ref };
-                            }
-                        },
-                        19 => {
-                            if (@field(this.runtime_imports, all[19])) |val| {
-                                return Entry{ .key = 19, .value = val.ref };
+                        inline 0...all.len - 1 => |t| {
+                            if (@field(this.runtime_imports, all[t])) |val| {
+                                return Entry{ .key = t, .value = val };
                             }
                         },
                         else => {
@@ -561,7 +401,7 @@ pub const Runtime = struct {
         };
 
         pub fn iter(imports: *Imports) Iterator {
-            return Iterator{ .runtime_imports = imports };
+            return .{ .runtime_imports = imports };
         }
 
         pub fn contains(imports: *const Imports, comptime key: string) bool {
@@ -578,15 +418,15 @@ pub const Runtime = struct {
             return false;
         }
 
-        pub fn put(imports: *Imports, comptime key: string, generated_symbol: GeneratedSymbol) void {
-            @field(imports, key) = generated_symbol;
+        pub fn put(imports: *Imports, comptime key: string, ref: Ref) void {
+            @field(imports, key) = ref;
         }
 
         pub fn at(
             imports: *Imports,
             comptime key: string,
         ) ?Ref {
-            return (@field(imports, key) orelse return null).ref;
+            return (@field(imports, key) orelse return null);
         }
 
         pub fn get(
@@ -594,26 +434,7 @@ pub const Runtime = struct {
             key: anytype,
         ) ?Ref {
             return switch (key) {
-                0 => (@field(imports, all[0]) orelse return null).ref,
-                1 => (@field(imports, all[1]) orelse return null).ref,
-                2 => (@field(imports, all[2]) orelse return null).ref,
-                3 => (@field(imports, all[3]) orelse return null).ref,
-                4 => (@field(imports, all[4]) orelse return null).ref,
-                5 => (@field(imports, all[5]) orelse return null).ref,
-                6 => (@field(imports, all[6]) orelse return null).ref,
-                7 => (@field(imports, all[7]) orelse return null).ref,
-                8 => (@field(imports, all[8]) orelse return null).ref,
-                9 => (@field(imports, all[9]) orelse return null).ref,
-                10 => (@field(imports, all[10]) orelse return null).ref,
-                11 => (@field(imports, all[11]) orelse return null).ref,
-                12 => (@field(imports, all[12]) orelse return null).ref,
-                13 => (@field(imports, all[13]) orelse return null).ref,
-                14 => (@field(imports, all[14]) orelse return null).ref,
-                15 => (@field(imports, all[15]) orelse return null).ref,
-                16 => (@field(imports, all[16]) orelse return null).ref,
-                17 => (@field(imports, all[17]) orelse return null).ref,
-                18 => (@field(imports, all[18]) orelse return null).ref,
-                19 => (@field(imports, all[19]) orelse return null).ref,
+                inline 0...all.len - 1 => |t| (@field(imports, all[t]) orelse return null),
                 else => null,
             };
         }

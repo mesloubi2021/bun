@@ -10,7 +10,7 @@ const wss = new WebSocketServer({
 server.on("listening", () => {
   const { address, port, family } = server.address();
   const { href } = new URL(family === "IPv6" ? `ws://[${address}]:${port}` : `ws://${address}:${port}`);
-  console.log(href);
+  process.send({ href });
   console.error("Listening:", href);
 });
 
@@ -90,5 +90,5 @@ process.on("exit", exitCode => {
 });
 
 const hostname = process.env.HOST || "127.0.0.1";
-const port = parseInt(process.env.PORT) || 0;
+const port = parseInt(process.env.PORT || "0");
 server.listen(port, hostname);

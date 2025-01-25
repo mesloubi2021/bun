@@ -1,11 +1,11 @@
 "use strict";
 
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import jwt from "jsonwebtoken";
-import { expect, describe, it, beforeEach } from "bun:test";
-import util from "util";
-import testUtils from "./test-utils";
 import jws from "jws";
 import sinon from "sinon";
+import util from "util";
+import testUtils from "./test-utils";
 
 function signWithIssueAt(issueAt, options, callback) {
   const payload = {};
@@ -15,7 +15,7 @@ function signWithIssueAt(issueAt, options, callback) {
   const opts = Object.assign({ algorithm: "HS256" }, options);
   // async calls require a truthy secret
   // see: https://github.com/brianloveswords/node-jws/issues/62
-  testUtils.signJWTHelper(payload, "secret", opts, callback);
+  testUtils.signJWTHelperWithoutAddingTimestamp(payload, "secret", opts, callback);
 }
 
 function verifyWithIssueAt(token, maxAge, options, secret, callback) {
@@ -38,7 +38,7 @@ describe("issue at", function () {
 
     // undefined needs special treatment because {} is not the same as {iat: undefined}
     it("should error with iat of undefined", function (done) {
-      testUtils.signJWTHelper({ iat: undefined }, "secret", { algorithm: "HS256" }, err => {
+      testUtils.signJWTHelperWithoutAddingTimestamp({ iat: undefined }, "secret", { algorithm: "HS256" }, err => {
         testUtils.asyncCheck(done, () => {
           expect(err).toBeInstanceOf(Error);
           expect(err.message).toEqual('"iat" should be a number of seconds');

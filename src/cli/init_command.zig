@@ -12,37 +12,23 @@ const std = @import("std");
 const open = @import("../open.zig");
 const CLI = @import("../cli.zig");
 const Fs = @import("../fs.zig");
-const ParseJSON = @import("../json_parser.zig").ParseJSONUTF8;
+const JSON = bun.JSON;
 const js_parser = bun.js_parser;
 const js_ast = bun.JSAst;
 const linker = @import("../linker.zig");
 const options = @import("../options.zig");
 const initializeStore = @import("./create_command.zig").initializeStore;
 const lex = bun.js_lexer;
-const logger = @import("root").bun.logger;
+const logger = bun.logger;
 const JSPrinter = bun.js_printer;
+const exists = bun.sys.exists;
+const existsZ = bun.sys.existsZ;
 
-fn exists(path: anytype) bool {
-    if (@TypeOf(path) == [:0]const u8 or @TypeOf(path) == [:0]u8) {
-        if (std.os.accessZ(path, 0)) {
-            return true;
-        } else |_| {
-            return false;
-        }
-    } else {
-        if (std.os.access(path, 0)) {
-            return true;
-        } else |_| {
-            return false;
-        }
-    }
-}
 pub const InitCommand = struct {
-    fn prompt(
+    pub fn prompt(
         alloc: std.mem.Allocator,
         comptime label: string,
         default: []const u8,
-        _: bool,
     ) ![]const u8 {
         Output.pretty(label, .{});
         if (default.len > 0) {
@@ -51,7 +37,21 @@ pub const InitCommand = struct {
 
         Output.flush();
 
-        const input = try std.io.getStdIn().reader().readUntilDelimiterAlloc(alloc, '\n', 1024);
+        // unset `ENABLE_VIRTUAL_TERMINAL_INPUT` on windows. This prevents backspace from
+        // deleting the entire line
+        const original_mode: if (Environment.isWindows) ?bun.windows.DWORD else void = if (comptime Environment.isWindows)
+            bun.win32.unsetStdioModeFlags(0, bun.windows.ENABLE_VIRTUAL_TERMINAL_INPUT) catch null;
+
+        defer if (comptime Environment.isWindows) {
+            if (original_mode) |mode| {
+                _ = bun.windows.SetConsoleMode(bun.win32.STDIN_FD.cast(), mode);
+            }
+        };
+
+        var input = try bun.Output.buffered_stdin.reader().readUntilDelimiterAlloc(alloc, '\n', 1024);
+        if (strings.endsWithChar(input, '\r')) {
+            input = input[0 .. input.len - 1];
+        }
         if (input.len > 0) {
             return input;
         } else {
@@ -59,9 +59,57 @@ pub const InitCommand = struct {
         }
     }
 
-    const default_gitignore = @embedFile("gitignore-for-init");
-    const default_tsconfig = @embedFile("tsconfig-for-init.json");
-    const README = @embedFile("README-for-init.md");
+    const Assets = struct {
+        // "known" assets
+        const @".gitignore" = @embedFile("init/gitignore.default");
+        const @"tsconfig.json" = @embedFile("init/tsconfig.default.json");
+        const @"README.md" = @embedFile("init/README.default.md");
+
+        /// Create a new asset file, overriding anything that already exists. Known
+        /// assets will have their contents pre-populated; otherwise the file will be empty.
+        fn create(comptime asset_name: []const u8, args: anytype) !void {
+            const is_template = comptime (@TypeOf(args) != @TypeOf(null)) and @typeInfo(@TypeOf(args)).Struct.fields.len > 0;
+            return createFull(asset_name, asset_name, "", is_template, args);
+        }
+
+        fn createNew(filename: []const u8, contents: []const u8) !void {
+            var file = try std.fs.cwd().createFile(filename, .{ .truncate = true });
+            defer file.close();
+            try file.writeAll(contents);
+
+            Output.prettyln(" + <r><d>{s}<r>", .{filename});
+            Output.flush();
+        }
+
+        fn createFull(
+            /// name of possibly-existing asset
+            comptime asset_name: []const u8,
+            /// name of asset file to create
+            filename: []const u8,
+            /// optionally add a suffix to the end of the `+ filename` message. Must have a leading space.
+            comptime message_suffix: []const u8,
+            /// Treat the asset as a format string, using `args` to populate it. Only applies to known assets.
+            comptime is_template: bool,
+            /// Format arguments
+            args: anytype,
+        ) !void {
+            var file = try std.fs.cwd().createFile(filename, .{ .truncate = true });
+            defer file.close();
+
+            // Write contents of known assets to the new file. Template assets get formatted.
+            if (comptime @hasDecl(Assets, asset_name)) {
+                const asset = @field(Assets, asset_name);
+                if (comptime is_template) {
+                    try file.writer().print(asset, args);
+                } else {
+                    try file.writeAll(asset);
+                }
+            }
+
+            Output.prettyln(" + <r><d>{s}{s}<r>", .{ filename, message_suffix });
+            Output.flush();
+        }
+    };
 
     // TODO: unicode case folding
     fn normalizePackageName(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
@@ -98,7 +146,21 @@ pub const InitCommand = struct {
         entry_point: string = "",
     };
 
-    pub fn exec(alloc: std.mem.Allocator, argv: [][*:0]u8) !void {
+    pub fn exec(alloc: std.mem.Allocator, argv: [][:0]const u8) !void {
+        const print_help = brk: {
+            for (argv) |arg| {
+                if (strings.eqlComptime(arg, "--help")) {
+                    break :brk true;
+                }
+            }
+            break :brk false;
+        };
+
+        if (print_help) {
+            CLI.Command.Tag.printHelp(.InitCommand, true);
+            Global.exit(0);
+        }
+
         var fs = try Fs.FileSystem.init(null);
         const pathname = Fs.PathName.init(fs.topLevelDirWithoutTrailingSlash());
         const destination_dir = std.fs.cwd();
@@ -131,10 +193,12 @@ pub const InitCommand = struct {
                 package_json_contents = try MutableString.init(alloc, size);
                 package_json_contents.list.expandToCapacity();
 
+                const prev_file_pos = if (comptime Environment.isWindows) try pkg.getPos() else 0;
                 _ = pkg.preadAll(package_json_contents.list.items, 0) catch {
                     package_json_file = null;
                     break :read_package_json;
                 };
+                if (comptime Environment.isWindows) try pkg.seekTo(prev_file_pos);
             }
         }
 
@@ -152,7 +216,7 @@ pub const InitCommand = struct {
             process_package_json: {
                 var source = logger.Source.initPathString("package.json", package_json_contents.list.items);
                 var log = logger.Log.init(alloc);
-                var package_json_expr = ParseJSON(&source, &log, alloc) catch {
+                var package_json_expr = JSON.parsePackageJSONUTF8(&source, &log, alloc) catch {
                     package_json_file = null;
                     break :process_package_json;
                 };
@@ -192,7 +256,7 @@ pub const InitCommand = struct {
                 };
 
                 for (paths_to_try) |path| {
-                    if (exists(path)) {
+                    if (existsZ(path)) {
                         fields.entry_point = bun.asByteSlice(path);
                         break :infer;
                     }
@@ -210,7 +274,7 @@ pub const InitCommand = struct {
             ).data.e_object;
         }
 
-        const auto_yes = brk: {
+        const auto_yes = Output.stdout_descriptor_type != .terminal or brk: {
             for (argv) |arg_| {
                 const arg = bun.span(arg_);
                 if (strings.eqlComptime(arg, "-y") or strings.eqlComptime(arg, "--yes")) {
@@ -225,18 +289,26 @@ pub const InitCommand = struct {
                 Output.prettyln("<r><b>bun init<r> helps you get started with a minimal project and tries to guess sensible defaults. <d>Press ^C anytime to quit<r>\n\n", .{});
                 Output.flush();
 
-                fields.name = try normalizePackageName(alloc, try prompt(
+                const name = prompt(
                     alloc,
                     "<r><cyan>package name<r> ",
                     fields.name,
-                    Output.enable_ansi_colors_stdout,
-                ));
-                fields.entry_point = try prompt(
+                ) catch |err| {
+                    if (err == error.EndOfStream) return;
+                    return err;
+                };
+
+                fields.name = try normalizePackageName(alloc, name);
+
+                fields.entry_point = prompt(
                     alloc,
                     "<r><cyan>entry point<r> ",
                     fields.entry_point,
-                    Output.enable_ansi_colors_stdout,
-                );
+                ) catch |err| {
+                    if (err == error.EndOfStream) return;
+                    return err;
+                };
+
                 try Output.writer().writeAll("\n");
                 Output.flush();
             } else {
@@ -253,16 +325,16 @@ pub const InitCommand = struct {
 
         var steps = Steps{};
 
-        steps.write_gitignore = !exists(".gitignore");
+        steps.write_gitignore = !existsZ(".gitignore");
 
-        steps.write_readme = !exists("README.md") and !exists("README") and !exists("README.txt") and !exists("README.mdx");
+        steps.write_readme = !existsZ("README.md") and !existsZ("README") and !existsZ("README.txt") and !existsZ("README.mdx");
 
         steps.write_tsconfig = brk: {
-            if (exists("tsconfig.json")) {
+            if (existsZ("tsconfig.json")) {
                 break :brk false;
             }
 
-            if (exists("jsconfig.json")) {
+            if (existsZ("jsconfig.json")) {
                 break :brk false;
             }
 
@@ -311,7 +383,7 @@ pub const InitCommand = struct {
 
             if (needs_dev_dependencies) {
                 var dev_dependencies = fields.object.get("devDependencies") orelse js_ast.Expr.init(js_ast.E.Object, js_ast.E.Object{}, logger.Loc.Empty);
-                try dev_dependencies.data.e_object.putString(alloc, "bun-types", "latest");
+                try dev_dependencies.data.e_object.putString(alloc, "@types/bun", "latest");
                 try fields.object.put(alloc, "devDependencies", dev_dependencies);
             }
 
@@ -326,20 +398,21 @@ pub const InitCommand = struct {
             if (package_json_file == null) {
                 package_json_file = try std.fs.cwd().createFileZ("package.json", .{});
             }
-            var package_json_writer = JSPrinter.NewFileWriter(package_json_file.?);
+            const package_json_writer = JSPrinter.NewFileWriter(package_json_file.?);
 
             const written = JSPrinter.printJSON(
                 @TypeOf(package_json_writer),
                 package_json_writer,
                 js_ast.Expr{ .data = .{ .e_object = fields.object }, .loc = logger.Loc.Empty },
                 &logger.Source.initEmptyFile("package.json"),
+                .{},
             ) catch |err| {
                 Output.prettyErrorln("package.json failed to write due to error {s}", .{@errorName(err)});
                 package_json_file = null;
                 break :write_package_json;
             };
 
-            std.os.ftruncate(package_json_file.?.handle, written + 1) catch {};
+            std.posix.ftruncate(package_json_file.?.handle, written + 1) catch {};
             package_json_file.?.close();
         }
 
@@ -355,21 +428,15 @@ pub const InitCommand = struct {
                 }
             }
 
-            var entry = try cwd.createFile(fields.entry_point, .{ .truncate = true });
-            entry.writeAll("console.log(\"Hello via Bun!\");") catch {};
-            entry.close();
-            Output.prettyln(" + <r><d>{s}<r>", .{fields.entry_point});
-            Output.flush();
+            Assets.createNew(fields.entry_point, "console.log(\"Hello via Bun!\");") catch {
+                // suppress
+            };
         }
 
         if (steps.write_gitignore) {
-            brk: {
-                var file = std.fs.cwd().createFileZ(".gitignore", .{ .truncate = true }) catch break :brk;
-                defer file.close();
-                file.writeAll(default_gitignore) catch break :brk;
-                Output.prettyln(" + <r><d>.gitignore<r>", .{});
-                Output.flush();
-            }
+            Assets.create(".gitignore", .{}) catch {
+                // suppressed
+            };
         }
 
         if (steps.write_tsconfig) {
@@ -380,27 +447,18 @@ pub const InitCommand = struct {
                     "tsconfig.json"
                 else
                     "jsconfig.json";
-                var file = std.fs.cwd().createFileZ(filename, .{ .truncate = true }) catch break :brk;
-                defer file.close();
-                file.writeAll(default_tsconfig) catch break :brk;
-                Output.prettyln(" + <r><d>{s}<r><d> (for editor auto-complete)<r>", .{filename});
-                Output.flush();
+                Assets.createFull("tsconfig.json", filename, " (for editor autocomplete)", false, .{}) catch break :brk;
             }
         }
 
         if (steps.write_readme) {
-            brk: {
-                const filename = "README.md";
-                var file = std.fs.cwd().createFileZ(filename, .{ .truncate = true }) catch break :brk;
-                defer file.close();
-                file.writer().print(README, .{
-                    .name = fields.name,
-                    .bunVersion = Global.version.fmt(""),
-                    .entryPoint = fields.entry_point,
-                }) catch break :brk;
-                Output.prettyln(" + <r><d>{s}<r>", .{filename});
-                Output.flush();
-            }
+            Assets.create("README.md", .{
+                .name = fields.name,
+                .bunVersion = Environment.version_string,
+                .entryPoint = fields.entry_point,
+            }) catch {
+                // suppressed
+            };
         }
 
         if (fields.entry_point.len > 0) {
@@ -409,7 +467,7 @@ pub const InitCommand = struct {
                 " \"'",
                 fields.entry_point,
             )) {
-                Output.prettyln("  <r><cyan>bun run {any}<r>", .{JSPrinter.formatJSONString(fields.entry_point)});
+                Output.prettyln("  <r><cyan>bun run {any}<r>", .{bun.fmt.formatJSONStringLatin1(fields.entry_point)});
             } else {
                 Output.prettyln("  <r><cyan>bun run {s}<r>", .{fields.entry_point});
             }
@@ -417,17 +475,17 @@ pub const InitCommand = struct {
 
         Output.flush();
 
-        if (exists("package.json")) {
-            var process = std.ChildProcess.init(
+        if (existsZ("package.json")) {
+            var process = std.process.Child.init(
                 &.{
-                    try std.fs.selfExePathAlloc(alloc),
+                    try bun.selfExePath(),
                     "install",
                 },
                 alloc,
             );
-            process.stderr_behavior = .Pipe;
-            process.stdin_behavior = .Pipe;
-            process.stdout_behavior = .Pipe;
+            process.stderr_behavior = .Ignore;
+            process.stdin_behavior = .Ignore;
+            process.stdout_behavior = .Ignore;
             _ = try process.spawnAndWait();
         }
     }

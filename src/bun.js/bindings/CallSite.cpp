@@ -6,9 +6,12 @@
 #include "config.h"
 #include "CallSite.h"
 
+#include "JavaScriptCore/CallData.h"
 #include "helpers.h"
+#include "wtf/text/OrdinalNumber.h"
 
 #include <JavaScriptCore/JSCInlines.h>
+#include <optional>
 
 using namespace JSC;
 using namespace WebCore;
@@ -29,14 +32,12 @@ void CallSite::finishCreation(VM& vm, JSC::JSGlobalObject* globalObject, JSCStac
      * Thus, if we've already encountered a strict frame, we'll treat our frame as strict too. */
 
     bool isStrictFrame = encounteredStrictFrame;
+    JSC::CodeBlock* codeBlock = stackFrame.codeBlock();
     if (!isStrictFrame) {
-        JSC::CodeBlock* codeBlock = stackFrame.codeBlock();
         if (codeBlock) {
             isStrictFrame = codeBlock->ownerExecutable()->isInStrictContext();
         }
     }
-
-    JSC::JSObject* calleeObject = JSC::jsCast<JSC::JSObject*>(stackFrame.callee());
 
     // Initialize "this" and "function" (and set the "IsStrict" flag if needed)
     JSC::CallFrame* callFrame = stackFrame.callFrame();
@@ -60,12 +61,14 @@ void CallSite::finishCreation(VM& vm, JSC::JSGlobalObject* globalObject, JSCStac
 
     const auto* sourcePositions = stackFrame.getSourcePositions();
     if (sourcePositions) {
-        m_lineNumber = JSC::jsNumber(sourcePositions->line.oneBasedInt());
-        m_columnNumber = JSC::jsNumber(sourcePositions->startColumn.oneBasedInt());
+        m_lineNumber = sourcePositions->line;
+        m_columnNumber = sourcePositions->column;
     }
 
     if (stackFrame.isEval()) {
         m_flags |= static_cast<unsigned int>(Flags::IsEval);
+    } else if (stackFrame.isFunctionOrEval()) {
+        m_flags |= static_cast<unsigned int>(Flags::IsFunction);
     }
     if (stackFrame.isConstructor()) {
         m_flags |= static_cast<unsigned int>(Flags::IsConstructor);
@@ -85,44 +88,97 @@ void CallSite::visitChildrenImpl(JSCell* cell, Visitor& visitor)
     visitor.append(thisCallSite->m_functionName);
     visitor.append(thisCallSite->m_sourceURL);
 }
+JSC_DEFINE_HOST_FUNCTION(nativeFrameForTesting, (JSC::JSGlobalObject * globalObject, JSC::CallFrame* callFrame))
+{
+    auto& vm = globalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    JSC::JSFunction* function = jsCast<JSC::JSFunction*>(callFrame->argument(0));
+
+    return JSValue::encode(JSC::call(globalObject, function, JSC::ArgList(), "nativeFrameForTesting"_s));
+}
+
+JSValue createNativeFrameForTesting(Zig::GlobalObject* globalObject)
+{
+    VM& vm = globalObject->vm();
+
+    return JSC::JSFunction::create(vm, globalObject, 1, "nativeFrameForTesting"_s, nativeFrameForTesting, ImplementationVisibility::Public);
+}
 
 void CallSite::formatAsString(JSC::VM& vm, JSC::JSGlobalObject* globalObject, WTF::StringBuilder& sb)
 {
-    JSString* myTypeName = jsTypeStringForValue(globalObject, thisValue());
-    JSString* myFunction = functionName().toString(globalObject);
-    JSString* myFunctionName = functionName().toString(globalObject);
-    JSString* mySourceURL = sourceURL().toString(globalObject);
+    JSValue thisValue = jsUndefined();
+    if (m_thisValue) {
+        thisValue = m_thisValue.get();
+    }
 
-    JSString* myColumnNumber = columnNumber().toInt32(globalObject) != -1 ? columnNumber().toString(globalObject) : jsEmptyString(vm);
-    JSString* myLineNumber = lineNumber().toInt32(globalObject) != -1 ? lineNumber().toString(globalObject) : jsEmptyString(vm);
+    JSString* myFunctionName = functionName().toStringOrNull(globalObject);
+    JSString* mySourceURL = sourceURL().toStringOrNull(globalObject);
 
-    bool myIsConstructor = isConstructor();
+    String functionName;
+    if (myFunctionName && myFunctionName->length() > 0) {
+        functionName = myFunctionName->getString(globalObject);
+    } else if (m_flags & (static_cast<unsigned int>(Flags::IsFunction) | static_cast<unsigned int>(Flags::IsEval))) {
+        functionName = "<anonymous>"_s;
+    }
 
-    if (myFunctionName->length() > 0) {
-        if (myIsConstructor) {
+    std::optional<OrdinalNumber> column = columnNumber().zeroBasedInt() >= 0 ? std::optional(columnNumber()) : std::nullopt;
+    std::optional<OrdinalNumber> line = lineNumber().zeroBasedInt() >= 0 ? std::optional(lineNumber()) : std::nullopt;
+
+    if (functionName.length() > 0) {
+
+        if (isConstructor()) {
             sb.append("new "_s);
-        } else {
-            // TODO: print type or class name if available
-            // sb.append(myTypeName->getString(globalObject));
-            // sb.append(" "_s);
         }
-        sb.append(myFunctionName->getString(globalObject));
-    } else {
-        sb.append("<anonymous>"_s);
+
+        if (auto* object = thisValue.getObject()) {
+            auto catchScope = DECLARE_CATCH_SCOPE(vm);
+            auto className = object->calculatedClassName(object);
+            if (catchScope.exception()) {
+                catchScope.clearException();
+            }
+
+            if (className.length() > 0) {
+                sb.append(className);
+                sb.append("."_s);
+            }
+        }
+
+        sb.append(functionName);
     }
-    sb.append(" ("_s);
+
     if (isNative()) {
+        if (functionName.length() > 0) {
+            sb.append(" ("_s);
+        }
         sb.append("native"_s);
+        if (functionName.length() > 0) {
+            sb.append(")"_s);
+        }
     } else {
-        sb.append(mySourceURL->getString(globalObject));
-        sb.append(":"_s);
-        sb.append(myLineNumber->getString(globalObject));
-        sb.append(":"_s);
-        sb.append(myColumnNumber->getString(globalObject));
+        if (functionName.length() > 0) {
+            sb.append(" ("_s);
+        }
+        if (!mySourceURL || mySourceURL->length() == 0) {
+            sb.append("unknown"_s);
+        } else {
+            sb.append(mySourceURL->getString(globalObject));
+        }
+
+        if (line && column) {
+            sb.append(':');
+            sb.append(line.value().oneBasedInt());
+            sb.append(':');
+            sb.append(column.value().oneBasedInt());
+        } else if (line) {
+            sb.append(':');
+            sb.append(line.value().oneBasedInt());
+        }
+
+        if (functionName.length() > 0) {
+            sb.append(')');
+        }
     }
-    sb.append(")"_s);
 }
 
 DEFINE_VISIT_CHILDREN(CallSite);
-
 }

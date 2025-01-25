@@ -39,14 +39,13 @@ Ref<MessagePortChannel> MessagePortChannel::create(MessagePortChannelRegistry& r
 }
 
 MessagePortChannel::MessagePortChannel(MessagePortChannelRegistry& registry, const MessagePortIdentifier& port1, const MessagePortIdentifier& port2)
-    : m_registry(registry)
+    : m_ports { port1, port2 }
+    , m_registry(registry)
 {
     relaxAdoptionRequirement();
 
-    m_ports[0] = port1;
     m_processes[0] = port1.processIdentifier;
     m_entangledToProcessProtectors[0] = this;
-    m_ports[1] = port2;
     m_processes[1] = port2.processIdentifier;
     m_entangledToProcessProtectors[1] = this;
 
@@ -155,12 +154,8 @@ void MessagePortChannel::takeAllMessagesForPort(const MessagePortIdentifier& por
 
     // LOG(MessagePorts, "There are %zu messages to take for port %s. Taking them now, messages in flight is now %" PRIu64, result.size(), port.logString().utf8().data(), m_messageBatchesInFlight);
 
-    auto size = result.size();
-    callback(WTFMove(result), [size, this, port, protectedThis = WTFMove(m_pendingMessageProtectors[i])] {
+    callback(WTFMove(result), [this, port, protectedThis = WTFMove(m_pendingMessageProtectors[i])] {
         UNUSED_PARAM(port);
-#if LOG_DISABLED
-        UNUSED_PARAM(size);
-#endif
         --m_messageBatchesInFlight;
         // LOG(MessagePorts, "Message port channel %s was notified that a batch of %zu message port messages targeted for port %s just completed dispatch, in flight is now %" PRIu64, logString().utf8().data(), size, port.logString().utf8().data(), m_messageBatchesInFlight);
     });

@@ -59,6 +59,19 @@ static std::optional<Vector<uint8_t>> calculateSignature(const EVP_MD* algorithm
     return cipherText;
 }
 
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmHMAC::platformSignWithAlgorithm(const CryptoKeyHMAC& key, CryptoAlgorithmIdentifier algorithmIdentifier, const Vector<uint8_t>& data)
+{
+
+    auto algorithm = digestAlgorithm(algorithmIdentifier);
+    if (!algorithm)
+        return Exception { OperationError };
+
+    auto result = calculateSignature(algorithm, key.key(), data.data(), data.size());
+    if (!result)
+        return Exception { OperationError };
+    return WTFMove(*result);
+}
+
 ExceptionOr<Vector<uint8_t>> CryptoAlgorithmHMAC::platformSign(const CryptoKeyHMAC& key, const Vector<uint8_t>& data)
 {
     auto algorithm = digestAlgorithm(key.hashAlgorithmIdentifier());
@@ -71,6 +84,20 @@ ExceptionOr<Vector<uint8_t>> CryptoAlgorithmHMAC::platformSign(const CryptoKeyHM
     return WTFMove(*result);
 }
 
+ExceptionOr<bool> CryptoAlgorithmHMAC::platformVerifyWithAlgorithm(const CryptoKeyHMAC& key, CryptoAlgorithmIdentifier algorithmIdentifier, const Vector<uint8_t>& signature, const Vector<uint8_t>& data)
+{
+
+    auto algorithm = digestAlgorithm(algorithmIdentifier);
+    if (!algorithm)
+        return Exception { OperationError };
+
+    auto expectedSignature = calculateSignature(algorithm, key.key(), data.data(), data.size());
+    if (!expectedSignature)
+        return Exception { OperationError };
+    // Using a constant time comparison to prevent timing attacks.
+    return signature.size() == expectedSignature->size() && !constantTimeMemcmp(expectedSignature->span(), signature.span());
+}
+
 ExceptionOr<bool> CryptoAlgorithmHMAC::platformVerify(const CryptoKeyHMAC& key, const Vector<uint8_t>& signature, const Vector<uint8_t>& data)
 {
     auto algorithm = digestAlgorithm(key.hashAlgorithmIdentifier());
@@ -81,7 +108,7 @@ ExceptionOr<bool> CryptoAlgorithmHMAC::platformVerify(const CryptoKeyHMAC& key, 
     if (!expectedSignature)
         return Exception { OperationError };
     // Using a constant time comparison to prevent timing attacks.
-    return signature.size() == expectedSignature->size() && !constantTimeMemcmp(expectedSignature->data(), signature.data(), expectedSignature->size());
+    return signature.size() == expectedSignature->size() && !constantTimeMemcmp(expectedSignature->span(), signature.span());
 }
 
 } // namespace WebCore

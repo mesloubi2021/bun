@@ -1,8 +1,9 @@
-import { define } from "../scripts/class-definitions";
+import { define } from "../../codegen/class-definitions";
 
 function generate(name) {
   return define({
     name,
+    memoryCost: true,
     proto: {
       fetch: {
         fn: "doFetch",
@@ -16,9 +17,17 @@ function generate(name) {
         fn: "doPublish",
         length: 3,
       },
+      subscriberCount: {
+        fn: "doSubscriberCount",
+        length: 1,
+      },
       reload: {
         fn: "doReload",
         length: 2,
+      },
+      "@@dispose": {
+        fn: "dispose",
+        length: 0,
       },
       stop: {
         fn: "doStop",
@@ -27,6 +36,10 @@ function generate(name) {
       requestIP: {
         fn: "doRequestIP",
         length: 1,
+      },
+      timeout: {
+        fn: "doTimeout",
+        length: 2,
       },
       port: {
         getter: "getPort",
@@ -41,12 +54,22 @@ function generate(name) {
       pendingWebSockets: {
         getter: "getPendingWebSockets",
       },
+      ref: {
+        fn: "doRef",
+      },
+      unref: {
+        fn: "doUnref",
+      },
       hostname: {
         getter: "getHostname",
         cache: true,
       },
       address: {
         getter: "getAddress",
+        cache: true,
+      },
+      url: {
+        getter: "getURL",
         cache: true,
       },
       protocol: {
@@ -71,6 +94,7 @@ export default [
   define({
     name: "ServerWebSocket",
     JSType: "0b11101110",
+    memoryCost: true,
     proto: {
       send: {
         fn: "send",
@@ -79,18 +103,28 @@ export default [
       sendText: {
         fn: "sendText",
         length: 2,
-        DOMJIT: {
-          returns: "int",
-          args: ["JSString", "bool"],
-        },
+        // ASSERTION FAILED: m_data[index].lockCount
+        // /Users/jarred/actions-runner/_work/WebKit/WebKit/Source/JavaScriptCore/dfg/DFGRegisterBank.h(204) : void JSC::DFG::RegisterBank<JSC::GPRInfo>::unlock(RegID) [BankInfo = JSC::GPRInfo]
+        // 1   0x102740124 WTFCrash
+        // 3   0x103076bac JSC::MacroAssemblerARM64::add64(JSC::AbstractMacroAssembler<JSC::ARM64Assembler>::TrustedImm64, JSC::ARM64Registers::RegisterID, JSC::ARM64Registers::RegisterID)
+        // 4   0x10309a2d0 JSC::DFG::SpeculativeJIT::compileCallDOM(JSC::DFG::Node*)::$_0::operator()(JSC::DFG::Edge) const
+        // DOMJIT: {
+        //   returns: "int",
+        //   args: ["JSString", "bool"],
+        // },
       },
       sendBinary: {
         fn: "sendBinary",
         length: 2,
-        DOMJIT: {
-          returns: "int",
-          args: ["JSUint8Array", "bool"],
-        },
+        // ASSERTION FAILED: m_data[index].lockCount
+        // /Users/jarred/actions-runner/_work/WebKit/WebKit/Source/JavaScriptCore/dfg/DFGRegisterBank.h(204) : void JSC::DFG::RegisterBank<JSC::GPRInfo>::unlock(RegID) [BankInfo = JSC::GPRInfo]
+        // 1   0x102740124 WTFCrash
+        // 3   0x103076bac JSC::MacroAssemblerARM64::add64(JSC::AbstractMacroAssembler<JSC::ARM64Assembler>::TrustedImm64, JSC::ARM64Registers::RegisterID, JSC::ARM64Registers::RegisterID)
+        // 4   0x10309a2d0 JSC::DFG::SpeculativeJIT::compileCallDOM(JSC::DFG::Node*)::$_0::operator()(JSC::DFG::Edge) const
+        // DOMJIT: {
+        //   returns: "int",
+        //   args: ["JSUint8Array", "bool"],
+        // },
       },
       publishText: {
         fn: "publishText",
@@ -119,14 +153,17 @@ export default [
       close: {
         fn: "close",
         length: 3,
+        passThis: true,
       },
       terminate: {
         fn: "terminate",
         length: 0,
+        passThis: true,
       },
       cork: {
         fn: "cork",
         length: 1,
+        passThis: true,
       },
       getBufferedAmount: {
         fn: "getBufferedAmount",
@@ -167,6 +204,19 @@ export default [
     },
     finalize: true,
     construct: true,
+    klass: {},
+  }),
+
+  define({
+    name: "HTMLBundle",
+    noConstructor: true,
+    finalize: true,
+    proto: {
+      index: {
+        getter: "getIndex",
+        cache: true,
+      },
+    },
     klass: {},
   }),
 ];

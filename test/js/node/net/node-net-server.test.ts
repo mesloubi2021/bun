@@ -1,8 +1,9 @@
-import { createServer, Server, AddressInfo, Socket } from "net";
 import { realpathSync } from "fs";
+import { AddressInfo, createServer, Server, Socket } from "net";
+import { createTest } from "node-harness";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createTest } from "node-harness";
+import { once } from "node:events";
 
 const { describe, expect, it, createCallCheckCtx } = createTest(import.meta.path);
 
@@ -89,6 +90,35 @@ describe("net.createServer listen", () => {
       mustCall(() => {
         clearTimeout(timeout);
         server.close();
+        done();
+      }),
+    );
+
+    timeout = setTimeout(closeAndFail, 100);
+
+    server.listen(0, "0.0.0.0");
+  });
+
+  it("should provide listening property", done => {
+    const { mustCall, mustNotCall } = createCallCheckCtx(done);
+
+    const server: Server = createServer();
+    expect(server.listening).toBeFalse();
+
+    let timeout: Timer;
+    const closeAndFail = () => {
+      clearTimeout(timeout);
+      server.close();
+      mustNotCall()();
+    };
+
+    server.on("error", closeAndFail).on(
+      "listening",
+      mustCall(() => {
+        expect(server.listening).toBeTrue();
+        clearTimeout(timeout);
+        server.close();
+        expect(server.listening).toBeFalse();
         done();
       }),
     );
@@ -205,6 +235,64 @@ describe("net.createServer listen", () => {
       }),
     );
   });
+
+  it("should bind IPv4 0.0.0.0 when listen on 0.0.0.0, issue#7355", done => {
+    const { mustCall, mustNotCall } = createCallCheckCtx(done);
+
+    const server: Server = createServer();
+    let timeout: Timer;
+    const closeAndFail = () => {
+      clearTimeout(timeout);
+      server.close();
+      mustNotCall()();
+    };
+    server.on("error", closeAndFail);
+    timeout = setTimeout(closeAndFail, 100);
+
+    server.listen(
+      0,
+      "0.0.0.0",
+      mustCall(async () => {
+        const address = server.address() as AddressInfo;
+        expect(address.address).toStrictEqual("0.0.0.0");
+        expect(address.family).toStrictEqual("IPv4");
+
+        let err: Error | null = null;
+        try {
+          await Bun.connect({
+            hostname: "0.0.0.0",
+            port: address.port,
+            socket: {
+              data(socket) {},
+            },
+          });
+        } catch (e) {
+          err = e as Error;
+        }
+        expect(err).toBeNull();
+
+        try {
+          await Bun.connect({
+            hostname: "::",
+            port: address.port,
+            socket: {
+              data(socket) {},
+            },
+          });
+        } catch (e) {
+          err = e as Error;
+        }
+
+        expect(err).not.toBeNull();
+        expect(err!.message).toBe("Failed to connect");
+        expect(err!.name).toBe("Error");
+        expect(err!.code).toBe("ECONNREFUSED");
+
+        server.close();
+        done();
+      }),
+    );
+  });
 });
 
 describe("net.createServer events", () => {
@@ -302,15 +390,12 @@ describe("net.createServer events", () => {
     );
   });
 
-  it("should call close", done => {
-    let closed = false;
+  it("should call close", async () => {
+    const { promise, reject, resolve } = Promise.withResolvers();
     const server: Server = createServer();
-    server.listen().on("close", () => {
-      closed = true;
-    });
+    server.listen().on("close", resolve).on("error", reject);
     server.close();
-    expect(closed).toBe(true);
-    done();
+    await promise;
   });
 
   it("should call connection and drop", done => {
@@ -481,5 +566,28 @@ describe("net.createServer events", () => {
         },
       }).catch(closeAndFail);
     });
+  });
+
+  it("#8374", async () => {
+    const server = createServer();
+    const socketPath = join(tmpdir(), "test-unix-socket");
+
+    server.listen({ path: socketPath });
+    await once(server, "listening");
+
+    try {
+      const address = server.address() as string;
+      expect(address).toBe(socketPath);
+
+      const client = await Bun.connect({
+        unix: socketPath,
+        socket: {
+          data() {},
+        },
+      });
+      client.end();
+    } finally {
+      server.close();
+    }
   });
 });

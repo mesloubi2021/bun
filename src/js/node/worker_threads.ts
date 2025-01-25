@@ -4,23 +4,15 @@ declare const self: typeof globalThis;
 type WebWorker = InstanceType<typeof globalThis.Worker>;
 
 const EventEmitter = require("node:events");
-const { throwNotImplemented } = require("../internal/shared");
+const { throwNotImplemented, warnNotImplementedOnce } = require("../internal/shared");
 
 const { MessageChannel, BroadcastChannel, Worker: WebWorker } = globalThis;
 const SHARE_ENV = Symbol("nodejs.worker_threads.SHARE_ENV");
 
 const isMainThread = Bun.isMainThread;
-let [_workerData, _threadId, _receiveMessageOnPort] = $lazy("worker_threads");
+const { 0: _workerData, 1: _threadId, 2: _receiveMessageOnPort } = $cpp("Worker.cpp", "createNodeWorkerThreadsBinding");
 
 type NodeWorkerOptions = import("node:worker_threads").WorkerOptions;
-
-const emittedWarnings = new Set();
-function emitWarning(type, message) {
-  if (emittedWarnings.has(type)) return;
-  emittedWarnings.add(type);
-  // process.emitWarning(message); // our printing is bad
-  console.warn("[bun] Warning:", message);
-}
 
 function injectFakeEmitter(Class) {
   function messageEventHandler(event: MessageEvent) {
@@ -86,6 +78,7 @@ function injectFakeEmitter(Class) {
 
   Class.prototype.emit = function (event, ...args) {
     this.dispatchEvent(new (EventClass(event))(event, ...args));
+
     return this;
   };
 
@@ -110,6 +103,7 @@ function receiveMessageOnPort(port: MessagePort) {
   };
 }
 
+// TODO: parent port emulation is not complete
 function fakeParentPort() {
   const fake = Object.create(MessagePort.prototype);
   Object.defineProperty(fake, "onmessage", {
@@ -125,19 +119,20 @@ function fakeParentPort() {
     get() {
       return self.onmessageerror;
     },
-    set(value) {},
+    set(value) {
+      self.onmessageerror = value;
+    },
   });
 
+  const postMessage = $newCppFunction("ZigGlobalObject.cpp", "jsFunctionPostMessage", 1);
   Object.defineProperty(fake, "postMessage", {
     value(...args: [any, any]) {
-      return self.postMessage(...args);
+      return postMessage(...args);
     },
   });
 
   Object.defineProperty(fake, "close", {
-    value() {
-      return process.exit(0);
-    },
+    value() {},
   });
 
   Object.defineProperty(fake, "start", {
@@ -170,6 +165,16 @@ function fakeParentPort() {
     value: self.removeEventListener.bind(self),
   });
 
+  Object.defineProperty(fake, "removeListener", {
+    value: self.removeEventListener.bind(self),
+    enumerable: false,
+  });
+
+  Object.defineProperty(fake, "addListener", {
+    value: self.addEventListener.bind(self),
+    enumerable: false,
+  });
+
   return fake;
 }
 let parentPort: MessagePort | null = isMainThread ? null : fakeParentPort();
@@ -190,38 +195,57 @@ function moveMessagePortToContext() {
   throwNotImplemented("worker_threads.moveMessagePortToContext");
 }
 
-const unsupportedOptions = [
-  "eval",
-  "argv",
-  "execArgv",
-  "stdin",
-  "stdout",
-  "stderr",
-  "trackedUnmanagedFds",
-  "resourceLimits",
-];
+const unsupportedOptions = ["stdin", "stdout", "stderr", "trackedUnmanagedFds", "resourceLimits"];
 
 class Worker extends EventEmitter {
   #worker: WebWorker;
   #performance;
 
-  // this is used by wt.Worker.terminate();
-  // either is the exit code if exited, a promise resolving to the exit code, or undefined if we havent sent .terminate() yet
+  // this is used by terminate();
+  // either is the exit code if exited, a promise resolving to the exit code, or undefined if we haven't sent .terminate() yet
   #onExitPromise: Promise<number> | number | undefined = undefined;
+  #urlToRevoke = "";
 
   constructor(filename: string, options: NodeWorkerOptions = {}) {
     super();
     for (const key of unsupportedOptions) {
-      if (key in options) {
-        emitWarning("option." + key, `worker_threads.Worker option "${key}" is not implemented.`);
+      if (key in options && options[key] != null) {
+        warnNotImplementedOnce(`worker_threads.Worker option "${key}"`);
       }
     }
-    this.#worker = new WebWorker(filename, options);
-    this.#worker.addEventListener("close", this.#onClose.bind(this));
+
+    const builtinsGeneratorHatesEval = "ev" + "a" + "l"[0];
+    if (options && builtinsGeneratorHatesEval in options) {
+      if (options[builtinsGeneratorHatesEval]) {
+        const blob = new Blob([filename], { type: "" });
+        this.#urlToRevoke = filename = URL.createObjectURL(blob);
+      } else {
+        // if options.eval = false, allow the constructor below to fail, if
+        // we convert the code to a blob, it will succeed.
+        this.#urlToRevoke = filename;
+      }
+      delete options[builtinsGeneratorHatesEval];
+    }
+    try {
+      this.#worker = new WebWorker(filename, options);
+    } catch (e) {
+      if (this.#urlToRevoke) {
+        URL.revokeObjectURL(this.#urlToRevoke);
+      }
+      throw e;
+    }
+    this.#worker.addEventListener("close", this.#onClose.bind(this), { once: true });
     this.#worker.addEventListener("error", this.#onError.bind(this));
     this.#worker.addEventListener("message", this.#onMessage.bind(this));
     this.#worker.addEventListener("messageerror", this.#onMessageError.bind(this));
-    this.#worker.addEventListener("open", this.#onOpen.bind(this));
+    this.#worker.addEventListener("open", this.#onOpen.bind(this), { once: true });
+
+    if (this.#urlToRevoke) {
+      const url = this.#urlToRevoke;
+      new FinalizationRegistry(url => {
+        URL.revokeObjectURL(url);
+      }).register(this.#worker, url);
+    }
   }
 
   get threadId() {
@@ -254,7 +278,7 @@ class Worker extends EventEmitter {
   get performance() {
     return (this.#performance ??= {
       eventLoopUtilization() {
-        emitWarning("performance", "worker_threads.Worker.performance is not implemented.");
+        warnNotImplementedOnce("worker_threads.Worker.performance");
         return {
           idle: 0,
           active: 0,
@@ -292,7 +316,15 @@ class Worker extends EventEmitter {
     this.emit("exit", e.code);
   }
 
-  #onError(error: ErrorEvent) {
+  #onError(event: ErrorEvent) {
+    let error = event?.error;
+    if (!error) {
+      error = new Error(event.message, { cause: event });
+      const stack = event?.stack;
+      if (stack) {
+        error.stack = stack;
+      }
+    }
     this.emit("error", error);
   }
 
@@ -314,6 +346,7 @@ class Worker extends EventEmitter {
     throwNotImplemented("worker_threads.Worker.getHeapSnapshot");
   }
 }
+
 export default {
   Worker,
   workerData,

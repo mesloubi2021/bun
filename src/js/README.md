@@ -1,6 +1,6 @@
 # JS Modules
 
-**TLDR**: If anything here changes, re-run `make js`. If you add/remove files, `make regenerate-bindings`.
+**TLDR**: If anything here changes, re-run `bun run build`.
 
 - `./node` contains all `node:*` modules
 - `./bun` contains all `bun:*` modules
@@ -38,13 +38,13 @@ On top of this, we have some special functions that are handled by the builtin p
 
 - `require` works, but it must be passed a **string literal** that resolves to a module within `src/js`. This call gets replaced with `$getInternalField($internalModuleRegistery, <number>)`, which directly loads the module by its generated numerical ID, skipping the resolver for inter-internal modules.
 
-- `$debug` is exactly like console.log, but is stripped in release builds. It is disabled by default, requiring you to pass one of: `BUN_DEBUG_MODULE_NAME=1`, `BUN_DEBUG_JS=1`, or `BUN_DEBUG_ALL=1`. You can also do `if($debug) {}` to check if debug env var is set.
+- `$debug()` is exactly like console.log, but is stripped in release builds. It is disabled by default, requiring you to pass one of: `BUN_DEBUG_MODULE_NAME=1`, `BUN_DEBUG_JS=1`, or `BUN_DEBUG_ALL=1`. You can also do `if($debug) {}` to check if debug env var is set.
+
+- `$assert()` in debug builds will assert the condition, but it is stripped in release builds. If an assertion fails, the program continues to run, but an error is logged in the console containing the original source condition and any extra messages specified.
 
 - `IS_BUN_DEVELOPMENT` is inlined to be `true` in all development builds.
 
-- `process.platform` is properly inlined and DCE'd. Do use this to run different code on different platforms.
-
-- `$bundleError()` is like Zig's `@compileError`. It will stop a compile from succeeding.
+- `process.platform` and `process.arch` is properly inlined and DCE'd. Do use this to run different code on different platforms.
 
 ## Builtin Modules
 
@@ -67,7 +67,7 @@ To actually wire up one of these modules to the resolver, that is done separatel
 
 In function files, these are accessible in C++ by using `<file><function>CodeGenerator(vm)`, for example:
 
-```cpp
+```c
 object->putDirectBuiltinFunction(
   vm,
   globalObject,
@@ -81,9 +81,9 @@ object->putDirectBuiltinFunction(
 
 ## Building
 
-Run `make js` to bundle all the builtins. The output is placed in `src/js/out/{modules,functions}/`, where these files are loaded dynamically by `bun-debug` (an exact filepath is inlined into the binary pointing at where you cloned bun, so moving the binary to another machine may not work). In a release build, these get minified and inlined into the binary (Please commit those generated headers).
+Run `bun run build` to bundle all the builtins. The output is placed in `build/debug/js`, where these files are loaded dynamically by `bun-debug` (an exact filepath is inlined into the binary pointing at where you cloned bun, so moving the binary to another machine may not work). In a release build, these get minified and inlined into the binary (Please commit those generated headers).
 
-If you change the list of files or functions, you will have to run `make regenerate-bindings`, but otherwise any change can be done with just `make js`.
+If you change the list of files or functions, you will have to run `bun run build`.
 
 ## Notes on how the build process works
 

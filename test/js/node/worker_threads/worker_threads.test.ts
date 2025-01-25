@@ -1,8 +1,12 @@
-import wt from "worker_threads";
-import {
+import fs from "node:fs";
+import { join, relative, resolve } from "node:path";
+import wt, {
+  BroadcastChannel,
   getEnvironmentData,
   isMainThread,
   markAsUntransferable,
+  MessageChannel,
+  MessagePort,
   moveMessagePortToContext,
   parentPort,
   receiveMessageOnPort,
@@ -10,12 +14,21 @@ import {
   setEnvironmentData,
   SHARE_ENV,
   threadId,
-  workerData,
-  BroadcastChannel,
-  MessageChannel,
-  MessagePort,
   Worker,
+  workerData,
 } from "worker_threads";
+
+test("support eval in worker", async () => {
+  const worker = new Worker(`postMessage(1 + 1)`, {
+    eval: true,
+  });
+  const result = await new Promise(resolve => {
+    worker.on("message", resolve);
+  });
+  expect(result).toBe(2);
+  await worker.terminate();
+});
+
 test("all worker_threads module properties are present", () => {
   expect(wt).toHaveProperty("getEnvironmentData");
   expect(wt).toHaveProperty("isMainThread");
@@ -33,17 +46,17 @@ test("all worker_threads module properties are present", () => {
   expect(wt).toHaveProperty("MessagePort");
   expect(wt).toHaveProperty("Worker");
 
-  expect(getEnvironmentData).toBeDefined();
-  expect(isMainThread).toBeDefined();
-  expect(markAsUntransferable).toBeDefined();
-  expect(moveMessagePortToContext).toBeDefined();
-  expect(parentPort).toBeDefined();
-  expect(receiveMessageOnPort).toBeDefined();
+  expect(getEnvironmentData).toBeFunction();
+  expect(isMainThread).toBeBoolean();
+  expect(markAsUntransferable).toBeFunction();
+  expect(moveMessagePortToContext).toBeFunction();
+  expect(parentPort).toBeNull();
+  expect(receiveMessageOnPort).toBeFunction();
   expect(resourceLimits).toBeDefined();
   expect(SHARE_ENV).toBeDefined();
-  expect(setEnvironmentData).toBeDefined();
+  expect(setEnvironmentData).toBeFunction();
   expect(threadId).toBeNumber();
-  expect(workerData).toBeUndefined();
+  expect(workerData).toBeNull();
   expect(BroadcastChannel).toBeDefined();
   expect(MessageChannel).toBeDefined();
   expect(MessagePort).toBeDefined();
@@ -60,7 +73,7 @@ test("all worker_threads module properties are present", () => {
   }).toThrow("not yet implemented");
 });
 
-test("all worker_threads worker instance properties are present", () => {
+test("all worker_threads worker instance properties are present", async () => {
   const worker = new Worker(new URL("./worker.js", import.meta.url).href);
   expect(worker).toHaveProperty("threadId");
   expect(worker).toHaveProperty("ref");
@@ -113,9 +126,22 @@ test("all worker_threads worker instance properties are present", () => {
   expect(worker.rawListeners).toBeFunction();
   expect(worker.listenerCount).toBeFunction();
   expect(worker.eventNames).toBeFunction();
+  await worker.terminate();
 });
 
-test("receiveMessageOnPort works across threads", () => {
+test("threadId module and worker property is consistent", async () => {
+  const worker1 = new Worker(new URL("./worker-thread-id.ts", import.meta.url).href);
+  expect(threadId).toBe(0);
+  expect(worker1.threadId).toBeGreaterThan(0);
+  expect(() => worker1.postMessage({ workerId: worker1.threadId })).not.toThrow();
+  const worker2 = new Worker(new URL("./worker-thread-id.ts", import.meta.url).href);
+  expect(worker2.threadId).toBeGreaterThan(worker1.threadId);
+  expect(() => worker2.postMessage({ workerId: worker2.threadId })).not.toThrow();
+  await worker1.terminate();
+  await worker2.terminate();
+});
+
+test("receiveMessageOnPort works across threads", async () => {
   const { port1, port2 } = new MessageChannel();
   const worker = new Worker(new URL("./worker.js", import.meta.url).href, {
     workerData: port2,
@@ -125,13 +151,14 @@ test("receiveMessageOnPort works across threads", () => {
   let sharedBufferView = new Int32Array(sharedBuffer);
   let msg = { sharedBuffer };
   worker.postMessage(msg);
-  Atomics.wait(sharedBufferView, 0, 0);
+  expect(await Atomics.waitAsync(sharedBufferView, 0, 0).value).toBe("ok");
   const message = receiveMessageOnPort(port1);
   expect(message).toBeDefined();
   expect(message!.message).toBe("done!");
-});
+  await worker.terminate();
+}, 9999999);
 
-test("receiveMessageOnPort works with FIFO", () => {
+test("receiveMessageOnPort works as FIFO", () => {
   const { port1, port2 } = new MessageChannel();
 
   const message1 = { hello: "world" };
@@ -157,8 +184,65 @@ test("receiveMessageOnPort works with FIFO", () => {
 
   for (const value of [null, 0, -1, {}, []]) {
     expect(() => {
-      // @ts-ignore
+      // @ts-expect-error invalid type
       receiveMessageOnPort(value);
     }).toThrow();
   }
+}, 9999999);
+
+test("you can override globalThis.postMessage", async () => {
+  const worker = new Worker(new URL("./worker-override-postMessage.js", import.meta.url).href);
+  const message = await new Promise(resolve => {
+    worker.on("message", resolve);
+    worker.postMessage("Hello from worker!");
+  });
+  expect(message).toBe("Hello from worker!");
+  await worker.terminate();
+});
+
+test("support require in eval", async () => {
+  const worker = new Worker(`postMessage(require('process').argv[0])`, { eval: true });
+  const result = await new Promise(resolve => {
+    worker.on("message", resolve);
+    worker.on("error", resolve);
+  });
+  expect(result).toBe(Bun.argv[0]);
+  await worker.terminate();
+});
+
+test("support require in eval for a file", async () => {
+  const cwd = process.cwd();
+  console.log("cwd", cwd);
+  const dir = import.meta.dir;
+  const testfile = resolve(dir, "fixture-argv.js");
+  const realpath = relative(cwd, testfile).replaceAll("\\", "/");
+  console.log("realpath", realpath);
+  expect(() => fs.accessSync(join(cwd, realpath))).not.toThrow();
+  const worker = new Worker(`postMessage(require('./${realpath}').argv[0])`, { eval: true });
+  const result = await new Promise(resolve => {
+    worker.on("message", resolve);
+    worker.on("error", resolve);
+  });
+  expect(result).toBe(Bun.argv[0]);
+  await worker.terminate();
+});
+
+test("support require in eval for a file that doesnt exist", async () => {
+  const worker = new Worker(`postMessage(require('./fixture-invalid.js').argv[0])`, { eval: true });
+  const result = await new Promise(resolve => {
+    worker.on("message", resolve);
+    worker.on("error", resolve);
+  });
+  expect(result.toString()).toInclude(`error: Cannot find module './fixture-invalid.js' from 'blob:`);
+  await worker.terminate();
+});
+
+test("support worker eval that throws", async () => {
+  const worker = new Worker(`postMessage(throw new Error("boom"))`, { eval: true });
+  const result = await new Promise(resolve => {
+    worker.on("message", resolve);
+    worker.on("error", resolve);
+  });
+  expect(result.toString()).toInclude(`error: Unexpected throw`);
+  await worker.terminate();
 });

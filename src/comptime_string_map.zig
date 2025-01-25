@@ -1,4 +1,6 @@
+const JSC = bun.JSC;
 const std = @import("std");
+const bun = @import("root").bun;
 const mem = std.mem;
 const strings = @import("./string_immutable.zig");
 
@@ -41,7 +43,7 @@ pub fn ComptimeStringMapWithKeyType(comptime KeyType: type, comptime V: type, co
         } else {
             @compileError("Not implemented for this key type");
         }
-        std.sort.block(KV, &sorted_kvs, {}, lenAsc);
+        std.sort.pdq(KV, &sorted_kvs, {}, lenAsc);
         const min_len = sorted_kvs[0].key.len;
         const max_len = sorted_kvs[sorted_kvs.len - 1].key.len;
         var len_indexes: [max_len + 1]usize = undefined;
@@ -74,7 +76,8 @@ pub fn ComptimeStringMapWithKeyType(comptime KeyType: type, comptime V: type, co
             for (kvs, 0..) |kv, i| {
                 k[i] = kv.key;
             }
-            break :blk k[0..];
+            const final = k;
+            break :blk &final;
         };
 
         pub const Value = V;
@@ -97,11 +100,9 @@ pub fn ComptimeStringMapWithKeyType(comptime KeyType: type, comptime V: type, co
                 break :brk i;
             };
 
-            comptime var i = len_indexes[len];
-
             // This benchmarked faster for both small and large lists of strings than using a big switch statement
             // But only so long as the keys are a sorted list.
-            inline while (i < end) : (i += 1) {
+            inline for (len_indexes[len]..end) |i| {
                 if (strings.eqlComptimeCheckLenWithType(KeyType, str, kvs[i].key, false)) {
                     return kvs[i].value;
                 }
@@ -120,11 +121,9 @@ pub fn ComptimeStringMapWithKeyType(comptime KeyType: type, comptime V: type, co
                 break :brk i;
             };
 
-            comptime var i = len_indexes[len];
-
             // This benchmarked faster for both small and large lists of strings than using a big switch statement
             // But only so long as the keys are a sorted list.
-            inline while (i < end) : (i += 1) {
+            inline for (len_indexes[len]..end) |i| {
                 if (eqls(str, kvs[i].key)) {
                     return kvs[i].value;
                 }
@@ -166,9 +165,69 @@ pub fn ComptimeStringMapWithKeyType(comptime KeyType: type, comptime V: type, co
             return null;
         }
 
+        /// Caller must ensure that the input is a string.
+        pub fn fromJS(globalThis: *JSC.JSGlobalObject, input: JSC.JSValue) ?V {
+            if (comptime bun.Environment.allow_assert) {
+                if (!input.isString()) {
+                    @panic("ComptimeStringMap.fromJS: input is not a string");
+                }
+            }
+
+            const str = bun.String.fromJS(input, globalThis);
+            bun.assert(str.tag != .Dead);
+            defer str.deref();
+            return getWithEql(str, bun.String.eqlComptime);
+        }
+
+        /// Caller must ensure that the input is a string.
+        pub fn fromJSCaseInsensitive(globalThis: *JSC.JSGlobalObject, input: JSC.JSValue) ?V {
+            if (comptime bun.Environment.allow_assert) {
+                if (!input.isString()) {
+                    @panic("ComptimeStringMap.fromJS: input is not a string");
+                }
+            }
+
+            const str = bun.String.fromJS(input, globalThis);
+            bun.assert(str.tag != .Dead);
+            defer str.deref();
+            return str.inMapCaseInsensitive(@This());
+        }
+
+        pub fn fromString(str: bun.String) ?V {
+            return getWithEql(str, bun.String.eqlComptime);
+        }
+
+        pub fn getASCIIICaseInsensitive(input: anytype) ?V {
+            return getWithEqlLowercase(input, bun.strings.eqlComptimeIgnoreLen);
+        }
+
+        pub fn getWithEqlLowercase(input: anytype, comptime eql: anytype) ?V {
+            const Input = @TypeOf(input);
+            const length = if (@hasField(Input, "len")) input.len else input.length();
+            if (length < precomputed.min_len or length > precomputed.max_len)
+                return null;
+
+            comptime var i: usize = precomputed.min_len;
+            inline while (i <= precomputed.max_len) : (i += 1) {
+                if (length == i) {
+                    const lowerbuf: [i]u8 = brk: {
+                        var buf: [i]u8 = undefined;
+                        for (input, &buf) |c, *j| {
+                            j.* = std.ascii.toLower(c);
+                        }
+                        break :brk buf;
+                    };
+
+                    return getWithLengthAndEql(&lowerbuf, i, eql);
+                }
+            }
+
+            return null;
+        }
+
         pub fn getWithEql(input: anytype, comptime eql: anytype) ?V {
             const Input = @TypeOf(input);
-            const length = if (comptime std.meta.trait.isSlice(Input) or std.meta.trait.isZigString(Input)) input.len else input.length();
+            const length = if (@hasField(Input, "len")) input.len else input.length();
             if (length < precomputed.min_len or length > precomputed.max_len)
                 return null;
 
@@ -182,9 +241,39 @@ pub fn ComptimeStringMapWithKeyType(comptime KeyType: type, comptime V: type, co
             return null;
         }
 
+        pub fn getAnyCase(input: anytype) ?V {
+            return getCaseInsensitiveWithEql(input, bun.strings.eqlComptimeIgnoreLen);
+        }
+
+        pub fn getCaseInsensitiveWithEql(input: anytype, comptime eql: anytype) ?V {
+            const Input = @TypeOf(input);
+            const length = if (@hasField(Input, "len")) input.len else input.length();
+            if (length < precomputed.min_len or length > precomputed.max_len)
+                return null;
+
+            comptime var i: usize = precomputed.min_len;
+            inline while (i <= precomputed.max_len) : (i += 1) {
+                if (length == i) {
+                    const lowercased: [i]u8 = brk: {
+                        var buf: [i]u8 = undefined;
+                        for (input[0..i], &buf) |c, *b| {
+                            b.* = switch (c) {
+                                'A'...'Z' => c + 32,
+                                else => c,
+                            };
+                        }
+                        break :brk buf;
+                    };
+                    return getWithLengthAndEql(&lowercased, i, eql);
+                }
+            }
+
+            return null;
+        }
+
         pub fn getWithEqlList(input: anytype, comptime eql: anytype) ?V {
             const Input = @TypeOf(input);
-            const length = if (comptime std.meta.trait.isSlice(Input) or std.meta.trait.isZigString(Input)) input.len else input.length();
+            const length = if (@hasField(Input, "len")) input.len else input.length();
             if (length < precomputed.min_len or length > precomputed.max_len)
                 return null;
 
@@ -437,46 +526,3 @@ const TestEnum2 = enum {
         .{ "00", .FL },
     });
 };
-
-pub fn compareString(input: []const u8) !void {
-    var str = try std.heap.page_allocator.dupe(u8, input);
-    if (TestEnum2.map.has(str) != TestEnum2.official.has(str)) {
-        std.debug.panic("{s} - TestEnum2.map.has(str) ({d}) != TestEnum2.official.has(str) ({d})", .{
-            str,
-            @intFromBool(TestEnum2.map.has(str)),
-            @intFromBool(TestEnum2.official.has(str)),
-        });
-    }
-
-    std.debug.print("For string: \"{s}\" (has a match? {d})\n", .{ str, @intFromBool(TestEnum2.map.has(str)) });
-
-    var i: usize = 0;
-    var is_eql = false;
-    var timer = try std.time.Timer.start();
-
-    while (i < 99999999) : (i += 1) {
-        is_eql = @call(.never_inline, TestEnum2.map.has, .{str});
-    }
-    const new = timer.lap();
-
-    std.debug.print("- new {}\n", .{std.fmt.fmtDuration(new)});
-
-    i = 0;
-    while (i < 99999999) : (i += 1) {
-        is_eql = @call(.never_inline, TestEnum2.official.has, .{str});
-    }
-
-    const _std = timer.lap();
-
-    std.debug.print("- std {}\n\n", .{std.fmt.fmtDuration(_std)});
-}
-
-pub fn main() anyerror!void {
-    try compareString("naaaaaa");
-    try compareString("nothinz");
-    try compareString("these");
-    try compareString("incommon");
-    try compareString("noMatch");
-    try compareString("0");
-    try compareString("00");
-}

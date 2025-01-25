@@ -55,6 +55,9 @@ const FFIType = {
   function: 17,
   callback: 17,
   fn: 17,
+  napi_env: 18,
+  napi_value: 19,
+  buffer: 20,
 };
 
 const suffix = process.platform === "win32" ? "dll" : process.platform === "darwin" ? "dylib" : "so";
@@ -106,6 +109,10 @@ class JSCallback {
       closeCallback(ctx);
     }
   }
+
+  [Symbol.dispose]() {
+    this.close();
+  }
 }
 
 class CString extends String {
@@ -149,7 +156,7 @@ Object.defineProperty(globalThis, "__GlobalBunCString", {
   configurable: false,
 });
 
-const ffiWrappers = new Array(18);
+const ffiWrappers = new Array(21);
 
 var char = "val|0";
 ffiWrappers.fill(char);
@@ -157,8 +164,24 @@ ffiWrappers[FFIType.uint8_t] = "val<0?0:val>=255?255:val|0";
 ffiWrappers[FFIType.int16_t] = "val<=-32768?-32768:val>=32768?32768:val|0";
 ffiWrappers[FFIType.uint16_t] = "val<=0?0:val>=65536?65536:val|0";
 ffiWrappers[FFIType.int32_t] = "val|0";
-// we never want to return NaN
-ffiWrappers[FFIType.uint32_t] = "val<=0?0:val>=0xffffffff?0xffffffff:+val||0";
+// https://github.com/oven-sh/bun/issues/7007
+// This cast with `|0` looks incorrect as it converts 0xffffffff into -1, but this misinterpretation
+// of the integer is taken advantage of by a second misinterpretation of the bytes in the C binding
+// The bitwise operator | forces a conversion to int32_t, but it will wrap to negative numbers
+// when going above >0x7fffffff.
+//
+// What this |0 operatation also *seems to do* (citation needed) is convert the internal representation
+// of JSC::JSValue to ALWAYS use Int32Tag, which is important as `JSValue::asInt32()` can only handle
+// this encoding to properly deserialize this as an int32.
+//
+// tldr jsc internals: JSValue represents int32 as a tag value, then the int32 bytes.
+//                     and all other integers are as tagged 64-bit floats.
+//
+// The trick to fixing the bug: after using |0 to misinterpret and force the integer into Int32Tag,
+// when passing the value to the C ffi code, misinterpret it again, resulting in the correct uint32_t.
+//
+// To do this in native code, there is a spot in zig where uint32_t just prints int32_t.
+ffiWrappers[FFIType.uint32_t] = "val<0?0:val>0xFFFFFFFF?-1:val|0";
 ffiWrappers[FFIType.i64_fast] = `{
   if (typeof val === "bigint") {
     if (val <= BigInt(Number.MAX_SAFE_INTEGER) && val >= BigInt(-Number.MAX_SAFE_INTEGER)) {
@@ -235,15 +258,15 @@ ffiWrappers[FFIType.uint16_t] = `{
 ffiWrappers[FFIType.double] = `{
   if (typeof val === "bigint") {
     if (val.valueOf() < BigInt(Number.MAX_VALUE)) {
-      return Math.abs(Number(val).valueOf()) + 0.00000000000001 - 0.00000000000001;
+      return Math.abs(Number(val).valueOf()) + (0.00 - 0.00);
     }
   }
 
   if (!val) {
-    return 0 + 0.00000000000001 - 0.00000000000001;
+    return 0 + (0.00 - 0.00);
   }
 
-  return val + 0.00000000000001 - 0.00000000000001;
+  return val + (0.00 - 0.00);
 }`;
 
 ffiWrappers[FFIType.float] = ffiWrappers[10] = `{
@@ -259,6 +282,13 @@ Object.defineProperty(globalThis, "__GlobalBunFFIPtrFunctionForWrapper", {
   enumerable: false,
   configurable: true,
 });
+Object.defineProperty(globalThis, "__GlobalBunFFIPtrArrayBufferViewFn", {
+  value: function isTypedArrayView(val) {
+    return $isTypedArrayView(val);
+  },
+  enumerable: false,
+  configurable: true,
+});
 
 ffiWrappers[FFIType.cstring] = ffiWrappers[FFIType.pointer] = `{
   if (typeof val === "number") return val;
@@ -266,7 +296,11 @@ ffiWrappers[FFIType.cstring] = ffiWrappers[FFIType.pointer] = `{
     return null;
   }
 
-  if (ArrayBuffer.isView(val) || val instanceof ArrayBuffer) {
+  if (__GlobalBunFFIPtrArrayBufferViewFn(val)) {
+    return val;
+  }
+
+  if (val instanceof ArrayBuffer) {
     return __GlobalBunFFIPtrFunctionForWrapper(val);
   }
 
@@ -275,6 +309,14 @@ ffiWrappers[FFIType.cstring] = ffiWrappers[FFIType.pointer] = `{
   }
 
   throw new TypeError(\`Unable to convert \${ val } to a pointer\`);
+}`;
+
+ffiWrappers[FFIType.buffer] = `{
+  if (!__GlobalBunFFIPtrArrayBufferViewFn(val)) {
+    throw new TypeError("Expected a TypedArray");
+  }
+
+  return val;
 }`;
 
 ffiWrappers[FFIType.function] = `{
@@ -379,9 +421,81 @@ const native = {
   },
 };
 
+const ccFn = $newZigFunction("ffi.zig", "Bun__FFI__cc", 1);
+
+function normalizePath(path) {
+  if (typeof path === "string" && path?.startsWith?.("file:")) {
+    // import.meta.url returns a file: URL
+    // https://github.com/oven-sh/bun/issues/10304
+    path = Bun.fileURLToPath(path);
+  } else if (typeof path === "object" && path) {
+    if (path instanceof URL) {
+      // This is mostly for import.meta.resolve()
+      // https://github.com/oven-sh/bun/issues/10304
+      path = Bun.fileURLToPath(path as URL);
+    } else if ($inheritsBlob(path)) {
+      // must be a Bun.file() blob
+      // https://discord.com/channels/876711213126520882/1230114905898614794/1230114905898614794
+      path = path.name;
+    }
+  }
+
+  return path;
+}
+
 function dlopen(path, options) {
+  path = normalizePath(path);
+
   const result = nativeDLOpen(path, options);
-  if (result instanceof Error) throw result;
+  if (Error.isError(result)) throw result;
+
+  for (let key in result.symbols) {
+    var symbol = result.symbols[key];
+    if (options[key]?.args?.length || FFIType[options[key]?.returns as string] === FFIType.cstring) {
+      result.symbols[key] = FFIBuilder(
+        options[key].args ?? [],
+        options[key].returns ?? FFIType.void,
+        symbol,
+        // in stacktraces:
+        // instead of
+        //    "/usr/lib/sqlite3.so"
+        // we want
+        //    "sqlite3_get_version() - sqlit3.so"
+        path.includes("/") ? `${key} (${path.split("/").pop()})` : `${key} (${path})`,
+      );
+    } else {
+      // consistentcy
+      result.symbols[key].native = result.symbols[key];
+    }
+  }
+
+  // Bind it because it's a breaking change to not do so
+  // Previously, it didn't need to be bound
+  result.close = result.close.bind(result);
+
+  return result;
+}
+
+function cc(options) {
+  if (!$isObject(options)) {
+    throw new Error("Expected options to be an object");
+  }
+
+  let path = options?.source;
+  if (!path) {
+    throw new Error("Expected source to be a string to a file path");
+  }
+  if ($isJSArray(path)) {
+    for (let i = 0; i < path.length; i++) {
+      path[i] = normalizePath(path[i]);
+    }
+  } else {
+    path = normalizePath(path);
+  }
+  options.source = path;
+
+  const result = ccFn(options);
+  if (Error.isError(result)) throw result;
 
   for (let key in result.symbols) {
     var symbol = result.symbols[key];
@@ -467,4 +581,5 @@ export default {
   toArrayBuffer,
   toBuffer,
   viewSource,
+  cc,
 };

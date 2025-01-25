@@ -44,6 +44,14 @@ pub const Strong = struct {
         return .{};
     }
 
+    pub fn call(
+        this: *Strong,
+        args: []const JSC.JSValue,
+    ) JSC.JSValue {
+        const function = this.trySwap() orelse return .zero;
+        return function.call(this.globalThis.?, args);
+    }
+
     pub fn create(
         value: JSC.JSValue,
         globalThis: *JSC.JSGlobalObject,
@@ -55,7 +63,7 @@ pub const Strong = struct {
         return .{ .globalThis = globalThis };
     }
 
-    pub fn get(this: *Strong) ?JSC.JSValue {
+    pub fn get(this: *const Strong) ?JSC.JSValue {
         var ref = this.ref orelse return null;
         const result = ref.get();
         if (result == .zero) {
@@ -76,7 +84,7 @@ pub const Strong = struct {
         return result;
     }
 
-    pub fn has(this: *Strong) bool {
+    pub fn has(this: *const Strong) bool {
         var ref = this.ref orelse return false;
         return ref.get() != .zero;
     }
@@ -91,7 +99,7 @@ pub const Strong = struct {
     }
 
     pub fn set(this: *Strong, globalThis: *JSC.JSGlobalObject, value: JSC.JSValue) void {
-        var ref: *StrongImpl = this.ref orelse {
+        const ref: *StrongImpl = this.ref orelse {
             if (value == .zero) return;
             this.ref = StrongImpl.init(globalThis, value);
             this.globalThis = globalThis;
@@ -102,12 +110,12 @@ pub const Strong = struct {
     }
 
     pub fn clear(this: *Strong) void {
-        var ref: *StrongImpl = this.ref orelse return;
+        const ref: *StrongImpl = this.ref orelse return;
         ref.clear();
     }
 
     pub fn deinit(this: *Strong) void {
-        var ref: *StrongImpl = this.ref orelse return;
+        const ref: *StrongImpl = this.ref orelse return;
         this.ref = null;
         ref.deinit();
     }

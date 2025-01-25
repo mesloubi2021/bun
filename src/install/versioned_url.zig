@@ -13,10 +13,6 @@ pub const VersionedURL = extern struct {
         return this.version.order(other.version, lhs_buf, rhs_buf);
     }
 
-    pub fn fmt(this: VersionedURL, buf: []const u8) Semver.Version.Formatter {
-        return this.version.fmt(buf);
-    }
-
     pub fn count(this: VersionedURL, buf: []const u8, comptime Builder: type, builder: Builder) void {
         this.version.count(buf, comptime Builder, builder);
         builder.count(this.url.slice(buf));
@@ -24,7 +20,7 @@ pub const VersionedURL = extern struct {
 
     pub fn clone(this: VersionedURL, buf: []const u8, comptime Builder: type, builder: Builder) VersionedURL {
         return VersionedURL{
-            .version = this.version.clone(buf, Builder, builder),
+            .version = this.version.append(buf, Builder, builder),
             .url = builder.append(String, this.url.slice(buf)),
         };
     }

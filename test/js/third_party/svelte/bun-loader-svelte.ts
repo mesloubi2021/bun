@@ -6,11 +6,15 @@ await plugin({
     var { compile } = await import("svelte/compiler");
     var { readFileSync } = await import("fs");
     await 2;
-    builder.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
-      contents: compile(readFileSync(path, "utf8"), {
-        filename: path,
-        generate: "ssr",
-      }).js.code,
+    builder.onLoad({ filter: /\.svelte(\?[^.]+)?$/ }, ({ path }) => ({
+      contents: compile(
+        readFileSync(path.substring(0, path.includes("?") ? path.indexOf("?") : path.length), "utf-8"),
+        {
+          filename: path,
+          generate: "server",
+          dev: false,
+        },
+      ).js.code,
       loader: "js",
     }));
     await 1;

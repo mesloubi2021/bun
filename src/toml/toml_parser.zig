@@ -1,5 +1,5 @@
 const std = @import("std");
-const logger = @import("root").bun.logger;
+const logger = bun.logger;
 const toml_lexer = @import("./toml_lexer.zig");
 const Lexer = toml_lexer.Lexer;
 const importRecord = @import("../import_record.zig");
@@ -26,7 +26,7 @@ const ExprNodeIndex = js_ast.ExprNodeIndex;
 const ExprNodeList = js_ast.ExprNodeList;
 const StmtNodeList = js_ast.StmtNodeList;
 const BindingNodeList = js_ast.BindingNodeList;
-const assert = std.debug.assert;
+const assert = bun.assert;
 
 const LocRef = js_ast.LocRef;
 const S = js_ast.S;
@@ -60,7 +60,7 @@ const HashMapPool = struct {
             }
         }
 
-        var new_node = default_allocator.create(LinkedList.Node) catch unreachable;
+        const new_node = default_allocator.create(LinkedList.Node) catch unreachable;
         new_node.* = LinkedList.Node{ .data = HashMap.initContext(default_allocator, IdentityContext{}) };
         return new_node;
     }
@@ -81,9 +81,9 @@ pub const TOML = struct {
     log: *logger.Log,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, source_: logger.Source, log: *logger.Log) !TOML {
+    pub fn init(allocator: std.mem.Allocator, source_: logger.Source, log: *logger.Log, redact_logs: bool) !TOML {
         return TOML{
-            .lexer = try Lexer.init(log, source_, allocator),
+            .lexer = try Lexer.init(log, source_, allocator, redact_logs),
             .allocator = allocator,
             .log = log,
         };
@@ -109,9 +109,9 @@ pub const TOML = struct {
 
         switch (p.lexer.token) {
             .t_string_literal => {
-                const str = p.lexer.toEString();
+                const str = p.lexer.toString(loc);
                 try p.lexer.next();
-                return p.e(str, loc);
+                return str;
             },
             .t_identifier => {
                 const str = E.String{ .data = p.lexer.identifier };
@@ -149,7 +149,7 @@ pub const TOML = struct {
 
     pub fn parseKey(p: *TOML, allocator: std.mem.Allocator) anyerror!*Rope {
         var rope = try allocator.create(Rope);
-        var head = rope;
+        const head = rope;
         rope.* = .{
             .head = (try p.parseKeySegment()) orelse {
                 try p.lexer.expectedString("key");
@@ -166,7 +166,7 @@ pub const TOML = struct {
         return head;
     }
 
-    pub fn parse(source_: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator) !Expr {
+    pub fn parse(source_: *const logger.Source, log: *logger.Log, allocator: std.mem.Allocator, redact_logs: bool) !Expr {
         switch (source_.contents.len) {
             // This is to be consisntent with how disabled JS files are handled
             0 => {
@@ -175,7 +175,7 @@ pub const TOML = struct {
             else => {},
         }
 
-        var parser = try TOML.init(allocator, source_.*, log);
+        var parser = try TOML.init(allocator, source_.*, log, redact_logs);
 
         return try parser.runParser();
     }
@@ -185,7 +185,7 @@ pub const TOML = struct {
         var head = root.data.e_object;
 
         var stack = std.heap.stackFallback(@sizeOf(Rope) * 6, p.allocator);
-        var key_allocator = stack.get();
+        const key_allocator = stack.get();
 
         while (true) {
             const loc = p.lexer.loc();
@@ -196,14 +196,14 @@ pub const TOML = struct {
                 // child table
                 .t_open_bracket => {
                     try p.lexer.next();
-                    var key = try p.parseKey(key_allocator);
+                    const key = try p.parseKey(key_allocator);
 
                     try p.lexer.expect(.t_close_bracket);
                     if (!p.lexer.has_newline_before) {
                         try p.lexer.expectedString("line break");
                     }
 
-                    var parent_object = root.data.e_object.getOrPutObject(key, p.allocator) catch |err| {
+                    const parent_object = root.data.e_object.getOrPutObject(key, p.allocator) catch |err| {
                         switch (err) {
                             error.Clobber => {
                                 try p.lexer.addDefaultError("Table already defined");
@@ -219,7 +219,7 @@ pub const TOML = struct {
                 .t_open_bracket_double => {
                     try p.lexer.next();
 
-                    var key = try p.parseKey(key_allocator);
+                    const key = try p.parseKey(key_allocator);
 
                     try p.lexer.expect(.t_close_bracket_double);
                     if (!p.lexer.has_newline_before) {
@@ -235,7 +235,7 @@ pub const TOML = struct {
                             else => return err,
                         }
                     };
-                    var new_head = p.e(E.Object{}, loc);
+                    const new_head = p.e(E.Object{}, loc);
                     try array.data.e_array.push(p.allocator, new_head);
                     head = new_head.data.e_object;
                     stack.fixed_buffer_allocator.reset();
@@ -250,7 +250,8 @@ pub const TOML = struct {
 
     pub fn parseAssignment(p: *TOML, obj: *E.Object, allocator: std.mem.Allocator) anyerror!void {
         p.lexer.allow_double_bracket = false;
-        var rope = try p.parseKey(allocator);
+        const rope = try p.parseKey(allocator);
+        const rope_end = p.lexer.start;
 
         const is_array = p.lexer.token == .t_empty_array;
         if (is_array) {
@@ -262,13 +263,17 @@ pub const TOML = struct {
             obj.setRope(rope, p.allocator, try p.parseValue()) catch |err| {
                 switch (err) {
                     error.Clobber => {
-                        try p.lexer.addDefaultError("Cannot redefine key");
+                        const loc = rope.head.loc;
+                        assert(loc.start > 0);
+                        const start: u32 = @intCast(loc.start);
+                        const key_name = std.mem.trimRight(u8, p.source().contents[start..rope_end], &std.ascii.whitespace);
+                        p.lexer.addError(start, "Cannot redefine key '{s}'", .{key_name});
                         return error.SyntaxError;
                     },
                     else => return err,
                 }
             };
-        } else {}
+        }
         p.lexer.allow_double_bracket = true;
     }
 
@@ -292,13 +297,12 @@ pub const TOML = struct {
                 }, loc);
             },
             .t_string_literal => {
-                var str: E.String = p.lexer.toEString();
-
+                const result = p.lexer.toString(loc);
                 try p.lexer.next();
-                return p.e(str, loc);
+                return result;
             },
             .t_identifier => {
-                var str: E.String = E.String{ .data = p.lexer.identifier };
+                const str: E.String = E.String{ .data = p.lexer.identifier };
 
                 try p.lexer.next();
                 return p.e(str, loc);
@@ -326,9 +330,9 @@ pub const TOML = struct {
                 try p.lexer.next();
                 var is_single_line = !p.lexer.has_newline_before;
                 var stack = std.heap.stackFallback(@sizeOf(Rope) * 6, p.allocator);
-                var key_allocator = stack.get();
-                var expr = p.e(E.Object{}, loc);
-                var obj = expr.data.e_object;
+                const key_allocator = stack.get();
+                const expr = p.e(E.Object{}, loc);
+                const obj = expr.data.e_object;
 
                 while (p.lexer.token != .t_close_brace) {
                     if (obj.properties.len > 0) {
@@ -361,7 +365,7 @@ pub const TOML = struct {
             .t_open_bracket => {
                 try p.lexer.next();
                 var is_single_line = !p.lexer.has_newline_before;
-                var array_ = p.e(E.Array{}, loc);
+                const array_ = p.e(E.Array{}, loc);
                 var array = array_.data.e_array;
                 const allocator = p.allocator;
                 p.lexer.allow_double_bracket = false;

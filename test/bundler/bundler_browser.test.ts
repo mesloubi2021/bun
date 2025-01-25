@@ -1,7 +1,6 @@
 import assert from "assert";
-import dedent from "dedent";
-import { itBundled, testForFile } from "./expectBundled";
-var { describe, test, expect } = testForFile(import.meta.path);
+import { describe, expect } from "bun:test";
+import { itBundled } from "./expectBundled";
 
 describe("bundler", () => {
   const nodePolyfillList = {
@@ -41,6 +40,31 @@ describe("bundler", () => {
     "vm": "no-op",
     "zlib": "polyfill",
   };
+
+  itBundled("browser/NodeBuffer#12272", {
+    files: {
+      "/entry.js": /* js */ `
+        import * as buffer from "node:buffer";
+        import { Buffer } from "buffer";
+        import Buffer2 from "buffer";
+        import { Blob, File } from "buffer";
+        if (Buffer !== Buffer2) throw new Error("Buffer is not the same");
+        if (Blob !== globalThis.Blob) throw new Error("Blob is not the same");
+        if (File !== globalThis.File) throw new Error("File is not the same");
+        if (Buffer.from("foo").toString("hex") !== "666f6f") throw new Error("Buffer.from is broken");
+        if (buffer.isAscii("foo") !== true) throw new Error("Buffer.isAscii is broken");
+        if (Buffer2.alloc(10, 'b').toString("hex") !== "62626262626262626262") throw new Error("Buffer.alloc is broken");
+        console.log("Success!");
+      `,
+    },
+    target: "browser",
+    run: {
+      stdout: "Success!",
+    },
+    onAfterBundle(api) {
+      api.expectFile("out.js").not.toInclude("import ");
+    },
+  });
   itBundled("browser/NodeFS", {
     files: {
       "/entry.js": /* js */ `
@@ -55,6 +79,26 @@ describe("bundler", () => {
     target: "browser",
     run: {
       stdout: "function\nfunction\nundefined",
+    },
+    onAfterBundle(api) {
+      api.expectFile("out.js").not.toInclude("import ");
+    },
+  });
+  itBundled("browser/NodeTTY", {
+    files: {
+      "/entry.js": /* js */ `
+        import { isatty, ReadStream, WriteStream } from "node:tty";
+        console.log(typeof ReadStream);
+        console.log(typeof WriteStream);
+        console.log(isatty(0));
+      `,
+    },
+    target: "browser",
+    run: {
+      stdout: "function\nfunction\nfalse",
+    },
+    onAfterBundle(api) {
+      api.expectFile("out.js").not.toInclude("import ");
     },
   });
   // TODO: use nodePolyfillList to generate the code in here.
@@ -307,7 +351,6 @@ describe("bundler", () => {
     },
   });
   itBundled("browser/TargetNodeNonExistentBuiltinShouldBeExternal", {
-    skipOnEsbuild: true,
     files: {
       "/entry.js": `
         import net1 from "node:net1";
@@ -316,7 +359,7 @@ describe("bundler", () => {
     target: "node",
     onAfterBundle(api) {
       const contents = api.readFile("out.js");
-      expect(contents).toContain('from "node:net1"');
+      expect(contents).toBe("");
     },
   });
 });

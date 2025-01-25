@@ -1,14 +1,14 @@
 // The types in this file are not publicly defined, but do exist.
 // Stuff like `Bun.fs()` and so on.
 
-/**
- * Works like the zig `@compileError` built-in, but only supports plain strings.
- */
-declare function $bundleError(error: string);
-
 type BunFSWatchOptions = { encoding?: BufferEncoding; persistent?: boolean; recursive?: boolean; signal?: AbortSignal };
 type BunWatchEventType = "rename" | "change" | "error" | "close";
 type BunWatchListener<T> = (event: WatchEventType, filename: T | undefined) => void;
+
+/**
+ * If this is not tree-shaken away, the bundle will fail.
+ */
+declare function $bundleError(...message: any[]): never;
 
 interface BunFSWatcher {
   /**
@@ -105,10 +105,7 @@ declare module "bun" {
   var TOML: {
     parse(contents: string): any;
   };
-  function fs(): BunFS;
-  function _Os(): typeof import("node:os");
-  function _Path(isWin32?: boolean): typeof import("node:path");
-  function jest(): typeof import("bun:test");
+  function jest(path: string): typeof import("bun:test");
   var main: string;
   var tty: Array<{ hasColors: boolean }>;
   var FFI: any;
@@ -152,65 +149,8 @@ declare interface Error {
   code?: string;
 }
 
-/**
- * Load an internal native module. To see implementation details, open ZigGlobalObject.cpp and cmd+f `static JSC_DEFINE_HOST_FUNCTION(functionLazyLoad`
- *
- * This is only valid in src/js/ as it is replaced with `globalThis[Symbol.for("Bun.lazy")]` at bundle time.
- */
-function $lazy<T extends keyof BunLazyModules>(id: T): BunLazyModules[T];
-
-interface BunLazyModules {
-  "bun:jsc": Omit<typeof import("bun:jsc"), "jscDescribe" | "jscDescribeArray"> & {
-    describe: typeof import("bun:jsc").jscDescribe;
-    describeArray: typeof import("bun:jsc").jscDescribe;
-  };
-  "bun:stream": {
-    maybeReadMore: Function;
-    resume: Function;
-    emitReadable: Function;
-    onEofChunk: Function;
-    ReadableState: Function;
-  };
-  sqlite: any;
-  "vm": {
-    createContext: Function;
-    isContext: Function;
-    Script: typeof import("node:vm").Script;
-    runInNewContext: Function;
-    runInThisContext: Function;
-  };
-  /** typeof === 'undefined', but callable -> throws not implemented */
-  "masqueradesAsUndefined": (...args: any) => any;
-  pathToFileURL: typeof import("node:url").pathToFileURL;
-  fileURLToPath: typeof import("node:url").fileURLToPath;
-  noop: {
-    getterSetter: any;
-    function: any;
-    functionRegular: any;
-    callback: any;
-  };
-  "async_hooks": {
-    cleanupLater: () => void;
-    setAsyncHooksEnabled: (enabled: boolean) => void;
-  };
-  "worker_threads": [workerData: any, threadId: number, _receiveMessageOnPort: (port: MessagePort) => any];
-  "tty": {
-    ttySetMode: (fd: number, mode: number) => number;
-    isatty: (fd: number) => boolean;
-    getWindowSize: (fd: number, out: number[2]) => boolean;
-  };
-
-  // ReadableStream related
-  [1]: any;
-  [2]: any;
-  [4]: any;
-}
-
-/** Assign to this variable in src/js/{bun,node,thirdparty} to act as module.exports */
-declare var $exports: any;
-
 interface CommonJSModuleRecord {
-  $require(id: string, mod: any): any;
+  $require(id: string, mod: any, args_count: number, args: Array): any;
   children: CommonJSModuleRecord[];
   exports: any;
   id: string;
@@ -220,3 +160,61 @@ interface CommonJSModuleRecord {
   paths: string[];
   require: typeof require;
 }
+
+/**
+ * Call a native c++ binding, getting whatever it returns.
+ *
+ * This is more like a macro; it is replaced with a WebKit intrisic during
+ * codegen. Passing a template parameter will break codegen. Prefer `$cpp(...)
+ * as Foo` instead.
+ *
+ * Binding files are located in `src/bun.js/bindings`
+ *
+ * @see {@link $zig} for native zig bindings.
+ * @see `src/codegen/replacements.ts` for the script that performs replacement of this funciton.
+ *
+ * @param filename name of the c++ file containing the function. Do not pass a path.
+ * @param symbol   The name of the binding function to call. Use `dot.notation` to access
+ *                 member symbols.
+ *
+ * @returns whatever the binding function returns.
+ */
+declare function $cpp<T = any>(filename: NativeFilenameCPP, symbol: string): T;
+/**
+ * Call a native zig binding function, getting whatever it returns.
+ *
+ * This is more like a macro; it is replaced with a WebKit intrisic during
+ * codegen. Passing a template parameter will break codegen. Prefer `$zig(...)
+ * as Foo` instead.
+ *
+ * Binding files are located in `src/bun.js/bindings`
+ *
+ * @see {@link $cpp} for native c++ bindings.
+ * @see `src/codegen/replacements.ts` for the script that performs replacement of this funciton.
+ *
+ * @param filename name of the zig file containing the function. Do not pass a path.
+ * @param symbol   The name of the binding function. Use `dot.notation` to access
+ *                 member symbols.
+ *
+ * @returns whatever the binding function returns.
+ */
+declare function $zig<T = any>(filename: NativeFilenameZig, symbol: string): T;
+declare function $newCppFunction<T = (...args: any) => any>(
+  filename: NativeFilenameCPP,
+  symbol: string,
+  argCount: number,
+): T;
+declare function $newZigFunction<T = (...args: any) => any>(
+  filename: NativeFilenameZig,
+  symbol: string,
+  argCount: number,
+): T;
+/**
+ * Retrieves a handle to a function defined in Zig or C++, defined in a
+ * `.bind.ts` file. For more information on how to define bindgen functions, see
+ * [bindgen's documentation](https://bun.sh/docs/project/bindgen).
+ * @param filename - The basename of the `.bind.ts` file.
+ * @param symbol - The name of the function to call.
+ */
+declare function $bindgenFn<T = (...args: any) => any>(filename: string, symbol: string): T;
+// NOTE: $debug, $assert, and $isPromiseResolved omitted

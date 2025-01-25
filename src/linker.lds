@@ -1,9 +1,16 @@
-BUN_1.0 {
+BUN_1.2 {
     global:
 	napi*;
 	node_api_*;
-	__cxa_atexit;
-	__cxa_thread_atexit_impl;
+	node_module_register;
+
+	uv_os_getpid;
+	uv_os_getppid;
+
+	extern "C++" {
+		v8::*;
+		node::*;
+	};
     local:
 	*;
 };

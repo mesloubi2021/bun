@@ -10,6 +10,7 @@ const strings = bun.strings;
 const MutableString = bun.MutableString;
 const stringZ = bun.stringZ;
 const logger = bun.logger;
+const File = bun.sys.File;
 
 const Install = @import("./install.zig");
 const Resolution = @import("./resolution.zig").Resolution;
@@ -25,7 +26,7 @@ const ExternalString = Semver.ExternalString;
 const stringHash = String.Builder.stringHash;
 
 const Lockfile = @import("./lockfile.zig");
-const LoadFromDiskResult = Lockfile.LoadFromDiskResult;
+const LoadResult = Lockfile.LoadResult;
 
 const JSAst = bun.JSAst;
 const Expr = JSAst.Expr;
@@ -36,62 +37,64 @@ const S = JSAst.S;
 
 const debug = Output.scoped(.migrate, false);
 
-pub fn detectAndLoadOtherLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Log, bun_lockfile_path: stringZ) LoadFromDiskResult {
-    const dirname = bun_lockfile_path[0 .. strings.lastIndexOfChar(bun_lockfile_path, '/') orelse 0];
+pub fn detectAndLoadOtherLockfile(
+    this: *Lockfile,
+    dir: bun.FD,
+    manager: *Install.PackageManager,
+    allocator: Allocator,
+    log: *logger.Log,
+) LoadResult {
     // check for package-lock.json, yarn.lock, etc...
     // if it exists, do an in-memory migration
-    var buf: [bun.MAX_PATH_BYTES]u8 = undefined;
-    @memcpy(buf[0..dirname.len], dirname);
-
-    const cwd = std.fs.cwd();
 
     npm: {
-        const npm_lockfile_name = "package-lock.json";
-        @memcpy(buf[dirname.len .. dirname.len + npm_lockfile_name.len], npm_lockfile_name);
-        buf[dirname.len + npm_lockfile_name.len] = 0;
-        const lockfile_path = buf[0 .. dirname.len + npm_lockfile_name.len :0];
         var timer = std.time.Timer.start() catch unreachable;
-        const file = cwd.openFileZ(lockfile_path, .{ .mode = .read_only }) catch break :npm;
-        defer file.close();
-        var data = file.readToEndAlloc(allocator, std.math.maxInt(usize)) catch |err| {
-            return LoadFromDiskResult{ .err = .{ .step = .migrating, .value = err } };
-        };
-        const lockfile = migrateNPMLockfile(this, allocator, log, data, lockfile_path) catch |err| {
+        const lockfile = File.openat(dir, "package-lock.json", bun.O.RDONLY, 0).unwrap() catch break :npm;
+        defer lockfile.close();
+        var lockfile_path_buf: bun.PathBuffer = undefined;
+        const lockfile_path = bun.getFdPathZ(lockfile.handle, &lockfile_path_buf) catch break :npm;
+        const data = lockfile.readToEnd(allocator).unwrap() catch break :npm;
+        const migrate_result = migrateNPMLockfile(this, manager, allocator, log, data, lockfile_path) catch |err| {
             if (err == error.NPMLockfileVersionMismatch) {
                 Output.prettyErrorln(
-                    \\<red><b>error<r><d>:<r> Please upgrade package-lock.json to lockfileVersion 3
+                    \\<red><b>error<r><d>:<r> Please upgrade package-lock.json to lockfileVersion 2 or 3
                     \\
                     \\Run 'npm i --lockfile-version 3 --frozen-lockfile' to upgrade your lockfile without changing dependencies.
                 , .{});
                 Global.exit(1);
             }
-            if (Environment.allow_assert) {
-                const maybe_trace = @errorReturnTrace();
+            if (Environment.isDebug) {
+                bun.handleErrorReturnTrace(err, @errorReturnTrace());
+
                 Output.prettyErrorln("Error: {s}", .{@errorName(err)});
-                log.printForLogLevel(Output.errorWriter()) catch {};
-                if (maybe_trace) |trace| {
-                    std.debug.dumpStackTrace(trace.*);
-                }
+                log.print(Output.errorWriter()) catch {};
                 Output.prettyErrorln("Invalid NPM package-lock.json\nIn a release build, this would ignore and do a fresh install.\nAborting", .{});
                 Global.exit(1);
             }
-            return LoadFromDiskResult{ .err = .{ .step = .migrating, .value = err } };
+            return LoadResult{ .err = .{
+                .step = .migrating,
+                .value = err,
+                .lockfile_path = "package-lock.json",
+                .format = .binary,
+            } };
         };
 
-        if (lockfile == .ok) {
+        if (migrate_result == .ok) {
             Output.printElapsed(@as(f64, @floatFromInt(timer.read())) / std.time.ns_per_ms);
             Output.prettyError(" ", .{});
             Output.prettyErrorln("<d>migrated lockfile from <r><green>package-lock.json<r>", .{});
             Output.flush();
         }
 
-        return lockfile;
+        return migrate_result;
     }
 
-    return LoadFromDiskResult{ .not_found = {} };
+    return LoadResult{ .not_found = {} };
 }
 
-const IdMap = std.StringHashMapUnmanaged(IdMapValue);
+const ResolvedURLsMap = bun.StringHashMapUnmanaged(string);
+
+const IdMap = bun.StringHashMapUnmanaged(IdMapValue);
 const IdMapValue = struct {
     /// index into the old package-lock.json package entries.
     old_json_index: u32,
@@ -115,31 +118,39 @@ const dependency_keys = .{
     .optionalDependencies,
 };
 
-pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Log, data: string, path: string) !LoadFromDiskResult {
+pub fn migrateNPMLockfile(
+    this: *Lockfile,
+    manager: *Install.PackageManager,
+    allocator: Allocator,
+    log: *logger.Log,
+    data: string,
+    abs_path: string,
+) !LoadResult {
     debug("begin lockfile migration", .{});
 
-    try this.initEmpty(allocator);
+    this.initEmpty(allocator);
     Install.initializeStore();
 
-    const json_src = logger.Source.initPathString(path, data);
-    const json = bun.JSON.ParseJSONUTF8(&json_src, log, allocator) catch return error.InvalidNPMLockfile;
+    const json_src = logger.Source.initPathString(abs_path, data);
+    const json = bun.JSON.parseUTF8(&json_src, log, allocator) catch return error.InvalidNPMLockfile;
 
     if (json.data != .e_object) {
         return error.InvalidNPMLockfile;
     }
     if (json.get("lockfileVersion")) |version| {
-        if (!(version.data == .e_number and version.data.e_number.value == 3)) {
+        if (!(version.data == .e_number and
+            version.data.e_number.value >= 2 and
+            version.data.e_number.value <= 3))
+        {
             return error.NPMLockfileVersionMismatch;
         }
     } else {
         return error.InvalidNPMLockfile;
     }
 
+    bun.Analytics.Features.lockfile_migration_from_package_lock += 1;
+
     // Count pass
-    var builder_ = this.stringBuilder();
-    var builder = &builder_;
-    const name = (if (json.get("name")) |expr| expr.asString(allocator) else null) orelse "";
-    builder.count(name);
 
     var root_package: *E.Object = undefined;
     var packages_properties = brk: {
@@ -172,14 +183,18 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                 else => return error.InvalidNPMLockfile,
             };
 
+            // due to package paths and resolved properties for links and workspaces always having
+            // forward slashes, we depend on `processWorkspaceNamesArray` to always return workspace
+            // paths with forward slashes on windows
             const workspace_packages_count = try Lockfile.Package.processWorkspaceNamesArray(
                 &workspaces,
                 allocator,
+                &manager.workspace_package_json_cache,
                 log,
                 json_array,
                 &json_src,
                 wksp.loc,
-                builder,
+                null,
             );
             debug("found {d} workspace packages", .{workspace_packages_count});
             num_deps += workspace_packages_count;
@@ -187,6 +202,16 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
         }
         break :workspace_map null;
     };
+
+    // constructed "resolved" urls
+    var resolved_urls = ResolvedURLsMap{};
+    defer {
+        var itr = resolved_urls.iterator();
+        while (itr.next()) |entry| {
+            allocator.free(entry.value_ptr.*);
+        }
+        resolved_urls.deinit(allocator);
+    }
 
     // Counting Phase
     // This "IdMap" is used to make object key lookups faster for the `packages` object
@@ -241,20 +266,6 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                     return error.InvalidNPMLockfile;
                 }
                 num_deps +|= @as(u32, deps.data.e_object.properties.len);
-
-                for (deps.data.e_object.properties.slice()) |dep| {
-                    const dep_name = dep.key.?.asString(allocator).?;
-                    const version_string = dep.value.?.asString(allocator) orelse return error.InvalidNPMLockfile;
-
-                    builder.count(dep_name);
-                    builder.count(version_string);
-
-                    // If it's a folder or workspace, pessimistically assume we will need a maximum path
-                    switch (Dependency.Version.Tag.infer(version_string)) {
-                        .folder, .workspace => builder.cap += bun.MAX_PATH_BYTES,
-                        else => {},
-                    }
-                }
             }
         }
 
@@ -262,52 +273,56 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
             if (bin.data != .e_object) return error.InvalidNPMLockfile;
             switch (bin.data.e_object.properties.len) {
                 0 => return error.InvalidNPMLockfile,
-                1 => {
-                    const first_bin = bin.data.e_object.properties.at(0);
-                    const key = first_bin.key.?.asString(allocator).?;
-
-                    const workspace_entry = if (workspace_map) |map| map.map.get(pkg_path) else null;
-                    const is_workspace = workspace_entry != null;
-
-                    const pkg_name = if (is_workspace)
-                        workspace_entry.?.name
-                    else if (entry.value.?.get("name")) |set_name|
-                        (set_name.asString(this.allocator) orelse return error.InvalidNPMLockfile)
-                    else
-                        packageNameFromPath(pkg_path);
-
-                    if (!strings.eql(key, pkg_name)) {
-                        builder.count(key);
-                    }
-                    builder.count(first_bin.value.?.asString(allocator) orelse return error.InvalidNPMLockfile);
-                },
+                1 => {},
                 else => {
-                    for (bin.data.e_object.properties.slice()) |bin_entry| {
-                        builder.count(bin_entry.key.?.asString(allocator).?);
-                        builder.count(bin_entry.value.?.asString(allocator) orelse return error.InvalidNPMLockfile);
-                    }
                     num_extern_strings += @truncate(bin.data.e_object.properties.len * 2);
                 },
             }
         }
 
-        if (pkg.get("resolved")) |resolved_expr| {
-            const resolved = resolved_expr.asString(allocator) orelse return error.InvalidNPMLockfile;
-            if (strings.hasPrefixComptime(resolved, "file:")) {
-                builder.count(resolved[5..]);
-            } else if (strings.hasPrefixComptime(resolved, "git+")) {
-                builder.count(resolved[4..]);
-            } else {
-                builder.count(resolved);
+        if (pkg.get("resolved") == null) {
+            const version_prop = pkg.get("version");
+            const pkg_name = packageNameFromPath(pkg_path);
+            if (version_prop != null and pkg_name.len > 0) {
+                // construct registry url
+                const registry = manager.scopeForPackageName(pkg_name);
+                var count: usize = 0;
+                count += registry.url.href.len + pkg_name.len + "/-/".len;
+                if (pkg_name[0] == '@') {
+                    // scoped
+                    const slash_index = strings.indexOfChar(pkg_name, '/') orelse return error.InvalidNPMLockfile;
+                    if (slash_index >= pkg_name.len - 1) return error.InvalidNPMLockfile;
+                    count += pkg_name[slash_index + 1 ..].len;
+                } else {
+                    count += pkg_name.len;
+                }
+                const version_str = version_prop.?.asString(allocator) orelse return error.InvalidNPMLockfile;
+                count += "-.tgz".len + version_str.len;
 
-                // this is over-counting but whatever. it would be too hard to determine if the case here
-                // is an `npm`/`dist_tag` version (the only times this is actually used)
-                if (pkg.get("version")) |v| if (v.asString(allocator)) |s| {
-                    builder.count(s);
-                };
+                const resolved_url = allocator.alloc(u8, count) catch unreachable;
+                var remain = resolved_url;
+                @memcpy(remain[0..registry.url.href.len], registry.url.href);
+                remain = remain[registry.url.href.len..];
+                @memcpy(remain[0..pkg_name.len], pkg_name);
+                remain = remain[pkg_name.len..];
+                remain[0.."/-/".len].* = "/-/".*;
+                remain = remain["/-/".len..];
+                if (pkg_name[0] == '@') {
+                    const slash_index = strings.indexOfChar(pkg_name, '/') orelse unreachable;
+                    @memcpy(remain[0..pkg_name[slash_index + 1 ..].len], pkg_name[slash_index + 1 ..]);
+                    remain = remain[pkg_name[slash_index + 1 ..].len..];
+                } else {
+                    @memcpy(remain[0..pkg_name.len], pkg_name);
+                    remain = remain[pkg_name.len..];
+                }
+                remain[0] = '-';
+                remain = remain[1..];
+                @memcpy(remain[0..version_str.len], version_str);
+                remain = remain[version_str.len..];
+                remain[0..".tgz".len].* = ".tgz".*;
+
+                try resolved_urls.put(allocator, pkg_path, resolved_url);
             }
-        } else {
-            builder.count(pkg_path);
         }
     }
     if (num_deps == std.math.maxInt(u32)) return error.InvalidNPMLockfile; // lol
@@ -322,7 +337,10 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
     try this.packages.ensureTotalCapacity(allocator, package_idx);
     // The package index is overallocated, but we know the upper bound
     try this.package_index.ensureTotalCapacity(package_idx);
-    try builder.allocate();
+
+    // dependency on `resolved`, a dependencies version tag might change, requiring
+    // new strings to be allocated.
+    var string_buf = this.stringBuf();
 
     if (workspace_map) |wksp| {
         try this.workspace_paths.ensureTotalCapacity(allocator, wksp.map.unmanaged.entries.len);
@@ -330,8 +348,20 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
 
         for (wksp.map.keys(), wksp.map.values()) |k, v| {
             const name_hash = stringHash(v.name);
-            this.workspace_paths.putAssumeCapacity(name_hash, builder.append(String, k));
-            if (v.version) |version| this.workspace_versions.putAssumeCapacity(name_hash, version);
+
+            if (comptime Environment.allow_assert) {
+                bun.assert(!strings.containsChar(k, '\\'));
+            }
+
+            this.workspace_paths.putAssumeCapacity(name_hash, try string_buf.append(k));
+
+            if (v.version) |version_string| {
+                const sliced_version = Semver.SlicedString.init(version_string, version_string);
+                const result = Semver.Version.parse(sliced_version);
+                if (result.valid and result.wildcard == .none) {
+                    this.workspace_versions.putAssumeCapacity(name_hash, result.version.min());
+                }
+            }
         }
     }
 
@@ -342,9 +372,45 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
         // the counting pass
         const pkg = entry.value.?.data.e_object;
 
-        if (pkg.get("link") != null or if (pkg.get("inBundle") orelse pkg.get("extraneous")) |x| x.data == .e_boolean and x.data.e_boolean.value else false) continue;
-
         const pkg_path = entry.key.?.asString(allocator).?;
+
+        if (pkg.get("link")) |link| {
+            if (workspace_map) |wksp| {
+                if (link.data != .e_boolean) continue;
+                if (link.data.e_boolean.value) {
+                    if (pkg.get("resolved")) |resolved| {
+                        if (resolved.data != .e_string) continue;
+                        const resolved_str = resolved.asString(allocator).?;
+                        if (wksp.map.get(resolved_str)) |wksp_entry| {
+                            const pkg_name = packageNameFromPath(pkg_path);
+                            if (!strings.eqlLong(wksp_entry.name, pkg_name, true)) {
+                                const pkg_name_hash = stringHash(pkg_name);
+                                const path_entry = this.workspace_paths.getOrPut(allocator, pkg_name_hash) catch bun.outOfMemory();
+                                if (!path_entry.found_existing) {
+                                    // Package resolve path is an entry in the workspace map, but
+                                    // the package name is different. This package doesn't exist
+                                    // in node_modules, but we still allow packages to resolve to it's
+                                    // resolution.
+                                    path_entry.value_ptr.* = try string_buf.append(resolved_str);
+
+                                    if (wksp_entry.version) |version_string| {
+                                        const sliced_version = Semver.SlicedString.init(version_string, version_string);
+                                        const result = Semver.Version.parse(sliced_version);
+                                        if (result.valid and result.wildcard == .none) {
+                                            this.workspace_versions.put(allocator, pkg_name_hash, result.version.min()) catch bun.outOfMemory();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            continue;
+        }
+
+        if (if (pkg.get("inBundle") orelse pkg.get("extraneous")) |x| x.data == .e_boolean and x.data.e_boolean.value else false) continue;
 
         const workspace_entry = if (workspace_map) |map| map.map.get(pkg_path) else null;
         const is_workspace = workspace_entry != null;
@@ -362,21 +428,20 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
         if (Environment.allow_assert) {
             // If this is false, then it means we wrote wrong resolved ids
             // During counting phase we assign all the packages an id.
-            std.debug.assert(package_id == id_map.get(pkg_path).?.new_package_id);
+            bun.assert(package_id == id_map.get(pkg_path).?.new_package_id);
         }
 
         // Instead of calling this.appendPackage, manually append
         // the other function has some checks that will fail since we have not set resolution+dependencies yet.
         this.packages.appendAssumeCapacity(Lockfile.Package{
-            .name = builder.appendWithHash(String, pkg_name, name_hash),
+            .name = try string_buf.appendWithHash(pkg_name, name_hash),
             .name_hash = name_hash,
 
             // For non workspace packages these are set to .uninitialized, then in the third phase
             // they are resolved. This is because the resolution uses the dependant's version
             // specifier as a "hint" to resolve the dependency.
             .resolution = if (is_workspace) Resolution.init(.{
-                // This string is counted by `processWorkspaceNamesArray`
-                .workspace = builder.append(String, pkg_path),
+                .workspace = try string_buf.append(pkg_path),
             }) else Resolution{},
 
             // we fill this data in later
@@ -389,29 +454,45 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                 .origin = if (package_id == 0) .local else .npm,
 
                 .arch = if (pkg.get("cpu")) |cpu_array| arch: {
+                    var arch = Npm.Architecture.none.negatable();
                     if (cpu_array.data != .e_array) return error.InvalidNPMLockfile;
-                    var arch: Npm.Architecture = .none;
+                    if (cpu_array.data.e_array.items.len == 0) {
+                        break :arch arch.combine();
+                    }
+
                     for (cpu_array.data.e_array.items.slice()) |item| {
                         if (item.data != .e_string) return error.InvalidNPMLockfile;
-                        arch = arch.apply(item.data.e_string.data);
+                        arch.apply(item.data.e_string.data);
                     }
-                    break :arch arch;
+                    break :arch arch.combine();
                 } else .all,
 
                 .os = if (pkg.get("os")) |cpu_array| arch: {
+                    var os = Npm.OperatingSystem.none.negatable();
                     if (cpu_array.data != .e_array) return error.InvalidNPMLockfile;
-                    var os: Npm.OperatingSystem = .none;
+                    if (cpu_array.data.e_array.items.len == 0) {
+                        break :arch .all;
+                    }
+
                     for (cpu_array.data.e_array.items.slice()) |item| {
                         if (item.data != .e_string) return error.InvalidNPMLockfile;
-                        os = os.apply(item.data.e_string.data);
+                        os.apply(item.data.e_string.data);
                     }
-                    break :arch os;
+                    break :arch os.combine();
                 } else .all,
 
                 .man_dir = String{},
 
+                .has_install_script = if (pkg.get("hasInstallScript")) |has_install_script_expr| brk: {
+                    if (has_install_script_expr.data != .e_boolean) return error.InvalidNPMLockfile;
+                    break :brk if (has_install_script_expr.data.e_boolean.value)
+                        .true
+                    else
+                        .false;
+                } else .false,
+
                 .integrity = if (pkg.get("integrity")) |integrity|
-                    try Integrity.parse(
+                    Integrity.parse(
                         integrity.asString(this.allocator) orelse
                             return error.InvalidNPMLockfile,
                     )
@@ -420,8 +501,8 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
             },
             .bin = if (pkg.get("bin")) |bin| bin: {
                 // we already check these conditions during counting
-                std.debug.assert(bin.data == .e_object);
-                std.debug.assert(bin.data.e_object.properties.len > 0);
+                bun.assert(bin.data == .e_object);
+                bun.assert(bin.data.e_object.properties.len > 0);
 
                 // in npm lockfile, the bin is always an object, even if it is only a single one
                 // we need to detect if it's a single entry and lower it to a file.
@@ -434,7 +515,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                         break :bin .{
                             .tag = .file,
                             .value = Bin.Value.init(.{
-                                .file = builder.append(String, script_value),
+                                .file = try string_buf.append(script_value),
                             }),
                         };
                     }
@@ -443,8 +524,8 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                         .tag = .named_file,
                         .value = Bin.Value.init(.{
                             .named_file = .{
-                                builder.append(String, key),
-                                builder.append(String, script_value),
+                                try string_buf.append(key),
+                                try string_buf.append(script_value),
                             },
                         }),
                     };
@@ -458,13 +539,13 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                 for (bin.data.e_object.properties.slice()) |bin_entry| {
                     const key = bin_entry.key.?.asString(this.allocator) orelse return error.InvalidNPMLockfile;
                     const script_value = bin_entry.value.?.asString(this.allocator) orelse return error.InvalidNPMLockfile;
-                    this.buffers.extern_strings.appendAssumeCapacity(builder.append(ExternalString, key));
-                    this.buffers.extern_strings.appendAssumeCapacity(builder.append(ExternalString, script_value));
+                    this.buffers.extern_strings.appendAssumeCapacity(try string_buf.appendExternal(key));
+                    this.buffers.extern_strings.appendAssumeCapacity(try string_buf.appendExternal(script_value));
                 }
 
                 if (Environment.allow_assert) {
-                    std.debug.assert(this.buffers.extern_strings.items.len == view.off + view.len);
-                    std.debug.assert(this.buffers.extern_strings.items.len <= this.buffers.extern_strings.capacity);
+                    bun.assert(this.buffers.extern_strings.items.len == view.off + view.len);
+                    bun.assert(this.buffers.extern_strings.items.len <= this.buffers.extern_strings.capacity);
                 }
 
                 break :bin .{
@@ -479,7 +560,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
         });
 
         if (is_workspace) {
-            std.debug.assert(package_id != 0); // root package should not be in it's own workspace
+            bun.assert(package_id != 0); // root package should not be in it's own workspace
 
             // we defer doing getOrPutID for non-workspace packages because it depends on the resolution being set.
             try this.getOrPutID(package_id, name_hash);
@@ -487,7 +568,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
     }
 
     if (Environment.allow_assert) {
-        std.debug.assert(this.packages.len == package_idx);
+        bun.assert(this.packages.len == package_idx);
     }
 
     // ignoring length check because we pre-allocated it. the length may shrink later
@@ -508,7 +589,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
 
     if (Environment.allow_assert) {
         for (resolutions) |r| {
-            std.debug.assert(r.tag == .uninitialized or r.tag == .workspace);
+            bun.assert(r.tag == .uninitialized or r.tag == .workspace);
         }
     }
 
@@ -544,8 +625,8 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                 // Calculate the offset + length by pointer arithmetic
                 const len: u32 = @truncate((@intFromPtr(resolutions_buf.ptr) - @intFromPtr(resolutions_start)) / @sizeOf(Install.PackageID));
                 if (Environment.allow_assert) {
-                    std.debug.assert(len > 0);
-                    std.debug.assert(len == ((@intFromPtr(dependencies_buf.ptr) - @intFromPtr(dependencies_start)) / @sizeOf(Dependency)));
+                    bun.assert(len > 0);
+                    bun.assert(len == ((@intFromPtr(dependencies_buf.ptr) - @intFromPtr(dependencies_start)) / @sizeOf(Dependency)));
                 }
                 dependencies_list[package_idx] = .{
                     .off = @truncate((@intFromPtr(dependencies_start) - @intFromPtr(this.buffers.dependencies.items.ptr)) / @sizeOf(Dependency)),
@@ -568,7 +649,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
             }
             if (expr.data != .e_array) return error.InvalidNPMLockfile;
             const arr: *E.Array = expr.data.e_array;
-            var map = std.StringArrayHashMapUnmanaged(void){};
+            var map = bun.StringArrayHashMapUnmanaged(void){};
             try map.ensureTotalCapacity(allocator, arr.items.len);
             for (arr.items.slice()) |item| {
                 map.putAssumeCapacity(item.asString(allocator) orelse return error.InvalidNPMLockfile, {});
@@ -582,8 +663,8 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                 for (wksp.keys(), wksp.values()) |key, value| {
                     const entry1 = id_map.get(key) orelse return error.InvalidNPMLockfile;
                     const name_hash = stringHash(value.name);
-                    const wksp_name = builder.append(String, value.name);
-                    const wksp_path = builder.append(String, key);
+                    const wksp_name = try string_buf.append(value.name);
+                    const wksp_path = try string_buf.append(key);
                     dependencies_buf[0] = Dependency{
                         .name = wksp_name,
                         .name_hash = name_hash,
@@ -594,9 +675,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                                 .workspace = wksp_path,
                             },
                         },
-                        .behavior = .{
-                            .workspace = true,
-                        },
+                        .behavior = Dependency.Behavior.workspace,
                     };
                     resolutions_buf[0] = entry1.new_package_id;
 
@@ -627,10 +706,10 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
 
                     const version_bytes = prop.value.?.asString(this.allocator) orelse return error.InvalidNPMLockfile;
                     const name_hash = stringHash(name_bytes);
-                    const dep_name = builder.appendWithHash(String, name_bytes, name_hash);
+                    const dep_name = try string_buf.appendWithHash(name_bytes, name_hash);
 
-                    const dep_version = builder.append(String, version_bytes);
-                    const sliced = dep_version.sliced(this.buffers.string_bytes.items);
+                    const dep_version = try string_buf.append(version_bytes);
+                    const sliced = dep_version.sliced(string_buf.bytes.items);
 
                     debug("parsing {s}, {s}\n", .{ name_bytes, version_bytes });
                     const version = Dependency.parse(
@@ -640,13 +719,14 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                         sliced.slice,
                         &sliced,
                         log,
+                        manager,
                     ) orelse {
                         return error.InvalidNPMLockfile;
                     };
                     debug("-> {s}, {}\n", .{ @tagName(version.tag), version.value });
 
                     if (Environment.allow_assert) {
-                        std.debug.assert(version.tag != .uninitialized);
+                        bun.assert(version.tag != .uninitialized);
                     }
 
                     const str_node_modules = if (pkg_path.len == 0) "node_modules/" else "/node_modules/";
@@ -679,14 +759,14 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
 
                             const id = found.new_package_id;
 
-                            var is_workspace = resolutions[id].tag == .workspace;
+                            const is_workspace = resolutions[id].tag == .workspace;
 
                             dependencies_buf[0] = Dependency{
                                 .name = dep_name,
                                 .name_hash = name_hash,
                                 .version = version,
                                 .behavior = .{
-                                    .normal = dep_key == .dependencies,
+                                    .prod = dep_key == .dependencies,
                                     .optional = dep_key == .optionalDependencies,
                                     .dev = dep_key == .devDependencies,
                                     .peer = dep_key == .peerDependencies,
@@ -703,19 +783,47 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                             if (resolutions[id].tag == .uninitialized) {
                                 debug("resolving '{s}'", .{name_bytes});
 
+                                var res_version = version;
+
                                 const res = resolved: {
                                     const dep_pkg = packages_properties.at(found.old_json_index).value.?.data.e_object;
-                                    const npm_resolution = dep_pkg.get("resolved") orelse {
+                                    const dep_resolved: string = dep_resolved: {
+                                        if (dep_pkg.get("resolved")) |resolved| {
+                                            const dep_resolved = resolved.asString(this.allocator) orelse return error.InvalidNPMLockfile;
+                                            switch (Dependency.Version.Tag.infer(dep_resolved)) {
+                                                .git, .github => |tag| {
+                                                    const dep_resolved_str = try string_buf.append(dep_resolved);
+                                                    const dep_resolved_sliced = dep_resolved_str.sliced(string_buf.bytes.items);
+                                                    res_version = Dependency.parseWithTag(
+                                                        this.allocator,
+                                                        dep_name,
+                                                        name_hash,
+                                                        dep_resolved_sliced.slice,
+                                                        tag,
+                                                        &dep_resolved_sliced,
+                                                        log,
+                                                        manager,
+                                                    ) orelse return error.InvalidNPMLockfile;
+
+                                                    break :dep_resolved dep_resolved;
+                                                },
+                                                // TODO(dylan-conway): might need to handle more cases
+                                                else => break :dep_resolved dep_resolved,
+                                            }
+                                        }
+
+                                        if (version.tag == .npm) {
+                                            if (resolved_urls.get(name_checking_buf[0..buf_len])) |resolved_url| {
+                                                break :dep_resolved resolved_url;
+                                            }
+                                        }
+
                                         break :resolved Resolution.init(.{
-                                            .folder = builder.append(
-                                                String,
-                                                packages_properties.at(found.old_json_index).key.?.asString(allocator).?,
-                                            ),
+                                            .folder = try string_buf.append(packages_properties.at(found.old_json_index).key.?.asString(allocator).?),
                                         });
                                     };
-                                    const dep_resolved = npm_resolution.asString(this.allocator) orelse return error.InvalidNPMLockfile;
 
-                                    break :resolved switch (version.tag) {
+                                    break :resolved switch (res_version.tag) {
                                         .uninitialized => std.debug.panic("Version string {s} resolved to `.uninitialized`", .{version_bytes}),
                                         .npm, .dist_tag => res: {
                                             // It is theoretically possible to hit this in a case where the resolved dependency is NOT
@@ -728,25 +836,25 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                                             const dep_actual_version = (dep_pkg.get("version") orelse return error.InvalidNPMLockfile)
                                                 .asString(this.allocator) orelse return error.InvalidNPMLockfile;
 
-                                            const dep_actual_version_str = builder.append(String, dep_actual_version);
-                                            const dep_actual_version_sliced = dep_actual_version_str.sliced(this.buffers.string_bytes.items);
+                                            const dep_actual_version_str = try string_buf.append(dep_actual_version);
+                                            const dep_actual_version_sliced = dep_actual_version_str.sliced(string_buf.bytes.items);
 
                                             break :res Resolution.init(.{
                                                 .npm = .{
-                                                    .url = builder.append(String, dep_resolved),
-                                                    .version = Semver.Version.parse(dep_actual_version_sliced).version.fill(),
+                                                    .url = try string_buf.append(dep_resolved),
+                                                    .version = Semver.Version.parse(dep_actual_version_sliced).version.min(),
                                                 },
                                             });
                                         },
                                         .tarball => if (strings.hasPrefixComptime(dep_resolved, "file:"))
-                                            Resolution.init(.{ .local_tarball = builder.append(String, dep_resolved[5..]) })
+                                            Resolution.init(.{ .local_tarball = try string_buf.append(dep_resolved[5..]) })
                                         else
-                                            Resolution.init(.{ .remote_tarball = builder.append(String, dep_resolved) }),
-                                        .folder => Resolution.init(.{ .folder = builder.append(String, dep_resolved) }),
+                                            Resolution.init(.{ .remote_tarball = try string_buf.append(dep_resolved) }),
+                                        .folder => Resolution.init(.{ .folder = try string_buf.append(dep_resolved) }),
                                         // not sure if this is possible to hit
-                                        .symlink => Resolution.init(.{ .folder = builder.append(String, dep_resolved) }),
+                                        .symlink => Resolution.init(.{ .folder = try string_buf.append(dep_resolved) }),
                                         .workspace => workspace: {
-                                            var input = builder.append(String, dep_resolved).sliced(this.buffers.string_bytes.items);
+                                            var input = (try string_buf.append(dep_resolved)).sliced(string_buf.bytes.items);
                                             if (strings.hasPrefixComptime(input.slice, "workspace:")) {
                                                 input = input.sub(input.slice["workspace:".len..]);
                                             }
@@ -756,17 +864,17 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                                         },
                                         .git => res: {
                                             const str = (if (strings.hasPrefixComptime(dep_resolved, "git+"))
-                                                builder.append(String, dep_resolved[4..])
+                                                try string_buf.append(dep_resolved[4..])
                                             else
-                                                builder.append(String, dep_resolved))
-                                                .sliced(this.buffers.string_bytes.items);
+                                                try string_buf.append(dep_resolved))
+                                                .sliced(string_buf.bytes.items);
 
                                             const hash_index = strings.lastIndexOfChar(str.slice, '#') orelse return error.InvalidNPMLockfile;
 
                                             const commit = str.sub(str.slice[hash_index + 1 ..]).value();
                                             break :res Resolution.init(.{
                                                 .git = .{
-                                                    .owner = version.value.git.owner,
+                                                    .owner = res_version.value.git.owner,
                                                     .repo = str.sub(str.slice[0..hash_index]).value(),
                                                     .committish = commit,
                                                     .resolved = commit,
@@ -776,17 +884,17 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                                         },
                                         .github => res: {
                                             const str = (if (strings.hasPrefixComptime(dep_resolved, "git+"))
-                                                builder.append(String, dep_resolved[4..])
+                                                try string_buf.append(dep_resolved[4..])
                                             else
-                                                builder.append(String, dep_resolved))
-                                                .sliced(this.buffers.string_bytes.items);
+                                                try string_buf.append(dep_resolved))
+                                                .sliced(string_buf.bytes.items);
 
                                             const hash_index = strings.lastIndexOfChar(str.slice, '#') orelse return error.InvalidNPMLockfile;
 
                                             const commit = str.sub(str.slice[hash_index + 1 ..]).value();
                                             break :res Resolution.init(.{
                                                 .git = .{
-                                                    .owner = version.value.github.owner,
+                                                    .owner = res_version.value.github.owner,
                                                     .repo = str.sub(str.slice[0..hash_index]).value(),
                                                     .committish = commit,
                                                     .resolved = commit,
@@ -796,7 +904,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                                         },
                                     };
                                 };
-                                debug("-> {}", .{res.fmtForDebug(this.buffers.string_bytes.items)});
+                                debug("-> {}", .{res.fmtForDebug(string_buf.bytes.items)});
 
                                 resolutions[id] = res;
                                 metas[id].origin = switch (res.tag) {
@@ -810,14 +918,15 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
 
                             continue :dep_loop;
                         }
-                        // step
+
+                        // step down each `node_modules/` of the source
                         if (strings.lastIndexOf(name_checking_buf[0..buf_len -| ("node_modules/".len + name_bytes.len)], "node_modules/")) |idx| {
                             debug("found 'node_modules/' at {d}", .{idx});
                             buf_len = @intCast(idx + "node_modules/".len + name_bytes.len);
                             bun.copy(u8, name_checking_buf[idx + "node_modules/".len .. idx + "node_modules/".len + name_bytes.len], name_bytes);
                         } else if (!strings.hasPrefixComptime(name_checking_buf[0..buf_len], "node_modules/")) {
-                            // this is hit if you start from `packages/etc`, from `packages/etc/node_modules/xyz`
-                            // we need to hit the root node_modules
+                            // this is hit if you are at something like `packages/etc`, from `packages/etc/node_modules/xyz`
+                            // we need to hit the root `node_modules/{name}`
                             buf_len = @intCast("node_modules/".len + name_bytes.len);
                             bun.copy(u8, name_checking_buf[0..buf_len], "node_modules/");
                             bun.copy(u8, name_checking_buf[buf_len - name_bytes.len .. buf_len], name_bytes);
@@ -834,7 +943,7 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
                                                 .name_hash = name_hash,
                                                 .version = version,
                                                 .behavior = .{
-                                                    .normal = dep_key == .dependencies,
+                                                    .prod = dep_key == .dependencies,
                                                     .optional = true,
                                                     .dev = dep_key == .devDependencies,
                                                     .peer = dep_key == .peerDependencies,
@@ -868,8 +977,8 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
     // In allow_assert, we prefill this buffer with uninitialized values that we can detect later
     // It is our fault if we hit an error here, making it safe to disable in release.
     if (Environment.allow_assert) {
-        std.debug.assert(this.buffers.dependencies.items.len == (@intFromPtr(dependencies_buf.ptr) - @intFromPtr(this.buffers.dependencies.items.ptr)) / @sizeOf(Dependency));
-        std.debug.assert(this.buffers.dependencies.items.len <= num_deps);
+        bun.assert(this.buffers.dependencies.items.len == (@intFromPtr(dependencies_buf.ptr) - @intFromPtr(this.buffers.dependencies.items.ptr)) / @sizeOf(Dependency));
+        bun.assert(this.buffers.dependencies.items.len <= num_deps);
         var crash = false;
         for (this.buffers.dependencies.items, 0..) |r, i| {
             // 'if behavior is uninitialized'
@@ -894,30 +1003,21 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
     var is_missing_resolutions = false;
     for (resolutions, 0..) |r, i| {
         if (r.tag == .uninitialized) {
-            Output.printErrorln("Could not resolve package '{s}' in lockfile.", .{this.packages.items(.name)[i].slice(this.buffers.string_bytes.items)});
+            Output.warn("Could not resolve package '{s}' in lockfile during migration", .{this.packages.items(.name)[i].slice(this.buffers.string_bytes.items)});
             is_missing_resolutions = true;
         } else if (Environment.allow_assert) {
             // Assertion from appendPackage. If we do this too early it will always fail as we dont have the resolution written
             // but after we write all the data, there is no excuse for this to fail.
             //
             // If this is hit, it means getOrPutID was not called on this package id. Look for where 'resolution[i]' is set
-            std.debug.assert(this.getPackageID(this.packages.items(.name_hash)[i], null, &r) != null);
+            bun.assert(this.getPackageID(this.packages.items(.name_hash)[i], null, &r) != null);
         }
     }
     if (is_missing_resolutions) {
         return error.NotAllPackagesGotResolved;
     }
 
-    // if (Environment.isDebug) {
-    //     const dump_file = try std.fs.cwd().createFileZ("before-clean.json", .{});
-    //     defer dump_file.close();
-    //     try std.json.stringify(this, .{ .whitespace = .indent_2 }, dump_file.writer());
-    // }
-
-    // This is definitely a memory leak, but it's fine because there is no install api, so this can only be leaked once per process.
-    // This operation is neccecary because callers of `loadFromDisk` assume the data is written into the passed `this`.
-    // You'll find that not cleaning the lockfile will cause `bun install` to not actually install anything since it doesnt have any hoisted trees.
-    this.* = (try this.cleanWithLogger(&[_]Install.PackageManager.UpdateRequest{}, log, false)).*;
+    try this.resolve(log);
 
     // if (Environment.isDebug) {
     //     const dump_file = try std.fs.cwd().createFileZ("after-clean.json", .{});
@@ -929,9 +1029,17 @@ pub fn migrateNPMLockfile(this: *Lockfile, allocator: Allocator, log: *logger.Lo
         try this.verifyData();
     }
 
-    this.meta_hash = try this.generateMetaHash(false);
+    this.meta_hash = try this.generateMetaHash(false, this.packages.len);
 
-    return LoadFromDiskResult{ .ok = this };
+    return LoadResult{
+        .ok = .{
+            .lockfile = this,
+            .was_migrated = true,
+            .loaded_from_binary_lockfile = false,
+            .serializer_result = .{},
+            .format = .binary,
+        },
+    };
 }
 
 fn packageNameFromPath(pkg_path: []const u8) []const u8 {

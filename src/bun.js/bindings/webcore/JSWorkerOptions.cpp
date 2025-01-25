@@ -57,7 +57,7 @@ template<> WorkerOptions convertDictionary<WorkerOptions>(JSGlobalObject& lexica
     if (isNullOrUndefined)
         nameValue = jsUndefined();
     else {
-        nameValue = object->get(&lexicalGlobalObject, Identifier::fromString(vm, "name"_s));
+        nameValue = object->get(&lexicalGlobalObject, vm.propertyNames->name);
         RETURN_IF_EXCEPTION(throwScope, {});
     }
     if (!nameValue.isUndefined()) {
@@ -69,7 +69,7 @@ template<> WorkerOptions convertDictionary<WorkerOptions>(JSGlobalObject& lexica
     // if (isNullOrUndefined)
     //     typeValue = jsUndefined();
     // else {
-    //     typeValue = object->get(&lexicalGlobalObject, Identifier::fromString(vm, "type"_s));
+    //     typeValue = object->get(&lexicalGlobalObject, vm.propertyNames->type);
     //     RETURN_IF_EXCEPTION(throwScope, { });
     // }
     // if (!typeValue.isUndefined()) {

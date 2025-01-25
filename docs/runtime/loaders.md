@@ -9,7 +9,7 @@ $ bun index.ts
 $ bun index.tsx
 ```
 
-Some aspects of Bun's runtime behavior are affected by the contents of your `tsconfig.json` file. Refer to [Runtime > TypeScript](/docs/runtime/typescript) page for details.
+Some aspects of Bun's runtime behavior are affected by the contents of your `tsconfig.json` file. Refer to [Runtime > TypeScript](https://bun.sh/docs/runtime/typescript) page for details.
 
 ## JSX
 
@@ -61,7 +61,7 @@ import pkg from "./package.json";
 import data from "./data.toml";
 ```
 
-## WASM
+## WASI
 
 {% callout %}
 🚧 **Experimental**
@@ -80,9 +80,20 @@ $ bun run ./my-wasm-app.whatever
 **Note** — WASI support is based on [wasi-js](https://github.com/sagemathinc/cowasm/tree/main/core/wasi-js). Currently, it only supports WASI binaries that use the `wasi_snapshot_preview1` or `wasi_unstable` APIs. Bun's implementation is not fully optimized for performance; this will become more of a priority as WASM grows in popularity.
 {% /callout %}
 
+## SQLite
+
+You can import sqlite databases directly into your code. Bun will automatically load the database and return a `Database` object.
+
+```ts
+import db from "./my.db" with { type: "sqlite" };
+console.log(db.query("select * from users LIMIT 1").get());
+```
+
+This uses [`bun:sqlite`](https://bun.sh/docs/api/sqlite).
+
 ## Custom loaders
 
-Support for additional file types can be implemented with plugins. Refer to [Runtime > Plugins](/docs/bundler/plugins) for full documentation.
+Support for additional file types can be implemented with plugins. Refer to [Runtime > Plugins](https://bun.sh/docs/bundler/plugins) for full documentation.
 
 <!--
 

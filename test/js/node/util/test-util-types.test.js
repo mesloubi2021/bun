@@ -1,7 +1,6 @@
 import assert from "assert";
-import { describe, test, expect } from "bun:test";
-import def from "util/types";
-import * as ns from "util/types";
+import { expect, test } from "bun:test";
+import def, * as ns from "util/types";
 const req = require("util/types");
 const types = def;
 
@@ -48,6 +47,7 @@ for (const [value, _method] of [
   [new DataView(new ArrayBuffer())],
   [new SharedArrayBuffer()],
   [new Proxy({}, {}), "isProxy"],
+  [new EventTarget()],
 ]) {
   const method = _method || `is${value.constructor.name}`;
   test(method, () => {
@@ -265,4 +265,15 @@ test("isGeneratorFunction", () => {
   for (let fn of [function normal() {}, async function asyncFn() {}]) {
     expect(types.isGeneratorFunction(fn)).toBeFalse();
   }
+});
+
+test("isKeyObject", () => {
+  const { generateKeyPairSync } = require("crypto");
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+
+  expect(types.isKeyObject(privateKey)).toBeTrue();
+  expect(types.isKeyObject(publicKey)).toBeTrue();
+  expect(types.isKeyObject({})).toBeFalse();
+  expect(types.isKeyObject(null)).toBeFalse();
+  expect(types.isKeyObject(undefined)).toBeFalse();
 });

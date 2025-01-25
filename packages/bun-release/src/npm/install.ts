@@ -3,7 +3,7 @@ import { spawn } from "../spawn";
 import { chmod, join, rename, rm, tmp, write } from "../fs";
 import { unzipSync } from "zlib";
 import type { Platform } from "../platform";
-import { os, arch, supportedPlatforms } from "../platform";
+import { os, arch, abi, supportedPlatforms } from "../platform";
 import { debug, error } from "../console";
 
 declare const version: string;
@@ -12,7 +12,7 @@ declare const owner: string;
 
 export async function importBun(): Promise<string> {
   if (!supportedPlatforms.length) {
-    throw new Error(`Unsupported platform: ${os} ${arch}`);
+    throw new Error(`Unsupported platform: ${os} ${arch} ${abi || ""}`);
   }
   for (const platform of supportedPlatforms) {
     try {
@@ -121,24 +121,15 @@ async function downloadBun(platform: Platform, dst: string): Promise<void> {
 }
 
 export function optimizeBun(path: string): void {
-  if (os === "win32") {
-    throw new Error(
-      "You must use Windows Subsystem for Linux, aka. WSL, to run bun. Learn more: https://learn.microsoft.com/en-us/windows/wsl/install",
-    );
-  }
-  const { npm_config_user_agent } = process.env;
-  if (npm_config_user_agent && /\byarn\//.test(npm_config_user_agent)) {
-    throw new Error(
-      "Yarn does not support bun, because it does not allow linking to binaries. To use bun, install using the following command: curl -fsSL https://bun.sh/install | bash",
-    );
-  }
+  const installScript =
+    os === "win32" ? 'powershell -c "irm bun.sh/install.ps1 | iex"' : "curl -fsSL https://bun.sh/install | bash";
   try {
-    rename(path, join(__dirname, "bin", "bun"));
+    rename(path, join(__dirname, "bin", "bun.exe"));
     return;
   } catch (error) {
     debug("optimizeBun failed", error);
   }
   throw new Error(
-    "Your package manager doesn't seem to support bun. To use bun, install using the following command: curl -fsSL https://bun.sh/install | bash",
+    `Your package manager doesn't seem to support bun. To use bun, install using the following command: ${installScript}`,
   );
 }

@@ -141,7 +141,9 @@ void JSReadableStreamDefaultController::finishCreation(VM& vm)
 
 JSObject* JSReadableStreamDefaultController::createPrototype(VM& vm, JSDOMGlobalObject& globalObject)
 {
-    return JSReadableStreamDefaultControllerPrototype::create(vm, &globalObject, JSReadableStreamDefaultControllerPrototype::createStructure(vm, &globalObject, globalObject.objectPrototype()));
+    auto* structure = JSReadableStreamDefaultControllerPrototype::createStructure(vm, &globalObject, globalObject.objectPrototype());
+    structure->setMayBePrototype(true);
+    return JSReadableStreamDefaultControllerPrototype::create(vm, &globalObject, structure);
 }
 
 JSObject* JSReadableStreamDefaultController::prototype(VM& vm, JSDOMGlobalObject& globalObject)
@@ -160,7 +162,7 @@ void JSReadableStreamDefaultController::destroy(JSC::JSCell* cell)
     thisObject->JSReadableStreamDefaultController::~JSReadableStreamDefaultController();
 }
 
-JSC_DEFINE_CUSTOM_GETTER(jsReadableStreamDefaultControllerConstructor, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
+JSC_DEFINE_CUSTOM_GETTER(jsReadableStreamDefaultControllerConstructor, (JSGlobalObject * lexicalGlobalObject, JSC::EncodedJSValue thisValue, PropertyName))
 {
     VM& vm = JSC::getVM(lexicalGlobalObject);
     auto throwScope = DECLARE_THROW_SCOPE(vm);

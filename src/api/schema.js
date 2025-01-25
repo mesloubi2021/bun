@@ -12,6 +12,8 @@ const Loader = {
   "11": 11,
   "12": 12,
   "13": 13,
+  "14": 14,
+  "15": 15,
   "jsx": 1,
   "js": 2,
   "ts": 3,
@@ -25,6 +27,8 @@ const Loader = {
   "base64": 11,
   "dataurl": 12,
   "text": 13,
+  "sqlite": 14,
+  "html": 15,
 };
 const LoaderKeys = {
   "1": "jsx",
@@ -40,6 +44,8 @@ const LoaderKeys = {
   "11": "base64",
   "12": "dataurl",
   "13": "text",
+  "14": "sqlite",
+  "15": "html",
   "jsx": "jsx",
   "js": "js",
   "ts": "ts",
@@ -53,6 +59,8 @@ const LoaderKeys = {
   "base64": "base64",
   "dataurl": "dataurl",
   "text": "text",
+  "sqlite": "sqlite",
+  "html": "html",
 };
 const FrameworkEntryPointType = {
   "1": 1,
@@ -144,14 +152,9 @@ function encodeStackFrame(message, bb) {
 function decodeStackFramePosition(bb) {
   var result = {};
 
-  result["source_offset"] = bb.readInt32();
   result["line"] = bb.readInt32();
-  result["line_start"] = bb.readInt32();
-  result["line_stop"] = bb.readInt32();
-  result["column_start"] = bb.readInt32();
-  result["column_stop"] = bb.readInt32();
-  result["expression_start"] = bb.readInt32();
-  result["expression_stop"] = bb.readInt32();
+  result["column"] = bb.readInt32();
+
   return result;
 }
 
@@ -1101,17 +1104,21 @@ const DotEnvBehavior = {
   "1": 1,
   "2": 2,
   "3": 3,
+  "4": 4,
   "disable": 1,
   "prefix": 2,
   "load_all": 3,
+  "load_all_without_inlining": 4,
 };
 const DotEnvBehaviorKeys = {
   "1": "disable",
   "2": "prefix",
   "3": "load_all",
+  "4": "load_all_without_inlining",
   "disable": "disable",
   "prefix": "prefix",
   "load_all": "load_all",
+  "load_all_without_inlining": "load_all_without_inlining",
 };
 
 function decodeEnvConfig(bb) {
@@ -1664,35 +1671,41 @@ function decodeTransformOptions(bb) {
 
       case 17:
         var length = bb.readVarUint();
-        var values = (result["extension_order"] = Array(length));
+        var values = (result["env_files"] = Array(length));
         for (var i = 0; i < length; i++) values[i] = bb.readString();
         break;
 
       case 18:
-        result["framework"] = decodeFrameworkConfig(bb);
+        var length = bb.readVarUint();
+        var values = (result["extension_order"] = Array(length));
+        for (var i = 0; i < length; i++) values[i] = bb.readString();
         break;
 
       case 19:
-        result["router"] = decodeRouteConfig(bb);
+        result["framework"] = decodeFrameworkConfig(bb);
         break;
 
       case 20:
-        result["no_summary"] = !!bb.readByte();
+        result["router"] = decodeRouteConfig(bb);
         break;
 
       case 21:
-        result["disable_hmr"] = !!bb.readByte();
+        result["no_summary"] = !!bb.readByte();
         break;
 
       case 22:
-        result["port"] = bb.readUint16();
+        result["disable_hmr"] = !!bb.readByte();
         break;
 
       case 23:
-        result["logLevel"] = MessageLevel[bb.readVarUint()];
+        result["port"] = bb.readUint16();
         break;
 
       case 24:
+        result["logLevel"] = MessageLevel[bb.readVarUint()];
+        break;
+
+      case 25:
         result["source_map"] = SourceMapMode[bb.readByte()];
         break;
 
@@ -1827,7 +1840,7 @@ function encodeTransformOptions(message, bb) {
     bb.writeByte(value);
   }
 
-  var value = message["extension_order"];
+  var value = message["env_files"];
   if (value != null) {
     bb.writeByte(17);
     var values = value,
@@ -1839,39 +1852,51 @@ function encodeTransformOptions(message, bb) {
     }
   }
 
-  var value = message["framework"];
+  var value = message["extension_order"];
   if (value != null) {
     bb.writeByte(18);
+    var values = value,
+      n = values.length;
+    bb.writeVarUint(n);
+    for (var i = 0; i < n; i++) {
+      value = values[i];
+      bb.writeString(value);
+    }
+  }
+
+  var value = message["framework"];
+  if (value != null) {
+    bb.writeByte(19);
     encodeFrameworkConfig(value, bb);
   }
 
   var value = message["router"];
   if (value != null) {
-    bb.writeByte(19);
+    bb.writeByte(20);
     encodeRouteConfig(value, bb);
   }
 
   var value = message["no_summary"];
   if (value != null) {
-    bb.writeByte(20);
+    bb.writeByte(21);
     bb.writeByte(value);
   }
 
   var value = message["disable_hmr"];
   if (value != null) {
-    bb.writeByte(21);
+    bb.writeByte(22);
     bb.writeByte(value);
   }
 
   var value = message["port"];
   if (value != null) {
-    bb.writeByte(22);
+    bb.writeByte(23);
     bb.writeUint16(value);
   }
 
   var value = message["logLevel"];
   if (value != null) {
-    bb.writeByte(23);
+    bb.writeByte(24);
     var encoded = MessageLevel[value];
     if (encoded === void 0) throw new Error("Invalid value " + JSON.stringify(value) + ' for enum "MessageLevel"');
     bb.writeVarUint(encoded);
@@ -1879,7 +1904,7 @@ function encodeTransformOptions(message, bb) {
 
   var value = message["source_map"];
   if (value != null) {
-    bb.writeByte(24);
+    bb.writeByte(25);
     var encoded = SourceMapMode[value];
     if (encoded === void 0) throw new Error("Invalid value " + JSON.stringify(value) + ' for enum "SourceMapMode"');
     bb.writeByte(encoded);
@@ -3038,6 +3063,10 @@ function decodeBunInstall(bb) {
         result["exact"] = !!bb.readByte();
         break;
 
+      case 21:
+        result["concurrent_scripts"] = bb.readUint32();
+        break;
+
       default:
         throw new Error("Attempted to parse invalid message");
     }
@@ -3169,6 +3198,12 @@ function encodeBunInstall(message, bb) {
   if (value != null) {
     bb.writeByte(20);
     bb.writeByte(value);
+  }
+
+  var value = message["concurrent_scripts"];
+  if (value != null) {
+    bb.writeByte(21);
+    bb.writeUint32(value);
   }
   bb.writeByte(0);
 }
@@ -3403,157 +3438,159 @@ function encodeGetTestsResponse(message, bb) {
   }
 }
 
-export { Loader };
-export { LoaderKeys };
-export { FrameworkEntryPointType };
-export { FrameworkEntryPointTypeKeys };
-export { StackFrameScope };
-export { StackFrameScopeKeys };
-export { decodeStackFrame };
-export { encodeStackFrame };
-export { decodeStackFramePosition };
-export { encodeStackFramePosition };
-export { decodeSourceLine };
-export { encodeSourceLine };
-export { decodeStackTrace };
-export { encodeStackTrace };
-export { decodeJSException };
-export { encodeJSException };
-export { FallbackStep };
-export { FallbackStepKeys };
-export { decodeProblems };
-export { encodeProblems };
-export { decodeRouter };
-export { encodeRouter };
-export { decodeFallbackMessageContainer };
-export { encodeFallbackMessageContainer };
-export { ResolveMode };
-export { ResolveModeKeys };
-export { Target };
-export { TargetKeys };
-export { CSSInJSBehavior };
-export { CSSInJSBehaviorKeys };
-export { JSXRuntime };
-export { JSXRuntimeKeys };
-export { decodeJSX };
-export { encodeJSX };
-export { decodeStringPointer };
-export { encodeStringPointer };
-export { decodeJavascriptBundledModule };
-export { encodeJavascriptBundledModule };
-export { decodeJavascriptBundledPackage };
-export { encodeJavascriptBundledPackage };
-export { decodeJavascriptBundle };
-export { encodeJavascriptBundle };
-export { decodeJavascriptBundleContainer };
-export { encodeJavascriptBundleContainer };
-export { ScanDependencyMode };
-export { ScanDependencyModeKeys };
-export { ModuleImportType };
-export { ModuleImportTypeKeys };
-export { decodeModuleImportRecord };
-export { encodeModuleImportRecord };
-export { decodeModule };
-export { encodeModule };
-export { decodeStringMap };
-export { encodeStringMap };
-export { decodeLoaderMap };
-export { encodeLoaderMap };
-export { DotEnvBehavior };
-export { DotEnvBehaviorKeys };
-export { decodeEnvConfig };
-export { encodeEnvConfig };
-export { decodeLoadedEnvConfig };
-export { encodeLoadedEnvConfig };
-export { decodeFrameworkConfig };
-export { encodeFrameworkConfig };
-export { decodeFrameworkEntryPoint };
-export { encodeFrameworkEntryPoint };
-export { decodeFrameworkEntryPointMap };
-export { encodeFrameworkEntryPointMap };
-export { decodeFrameworkEntryPointMessage };
-export { encodeFrameworkEntryPointMessage };
-export { decodeLoadedFramework };
-export { encodeLoadedFramework };
-export { decodeLoadedRouteConfig };
-export { encodeLoadedRouteConfig };
-export { decodeRouteConfig };
-export { encodeRouteConfig };
-export { decodeTransformOptions };
-export { encodeTransformOptions };
-export { SourceMapMode };
-export { SourceMapModeKeys };
-export { decodeFileHandle };
-export { encodeFileHandle };
-export { decodeTransform };
-export { encodeTransform };
-export { decodeScan };
-export { encodeScan };
-export { decodeScanResult };
-export { encodeScanResult };
-export { decodeScannedImport };
-export { encodeScannedImport };
-export { ImportKind };
-export { ImportKindKeys };
-export { TransformResponseStatus };
-export { TransformResponseStatusKeys };
-export { decodeOutputFile };
-export { encodeOutputFile };
-export { decodeTransformResponse };
-export { encodeTransformResponse };
-export { MessageLevel };
-export { MessageLevelKeys };
-export { decodeLocation };
-export { encodeLocation };
-export { decodeMessageData };
-export { encodeMessageData };
-export { decodeMessageMeta };
-export { encodeMessageMeta };
-export { decodeMessage };
-export { encodeMessage };
-export { decodeLog };
-export { encodeLog };
-export { Reloader };
-export { ReloaderKeys };
-export { WebsocketMessageKind };
-export { WebsocketMessageKindKeys };
-export { WebsocketCommandKind };
-export { WebsocketCommandKindKeys };
-export { decodeWebsocketMessage };
-export { encodeWebsocketMessage };
-export { decodeWebsocketMessageWelcome };
-export { encodeWebsocketMessageWelcome };
-export { decodeWebsocketMessageFileChangeNotification };
-export { encodeWebsocketMessageFileChangeNotification };
-export { decodeWebsocketCommand };
-export { encodeWebsocketCommand };
-export { decodeWebsocketCommandBuild };
-export { encodeWebsocketCommandBuild };
-export { decodeWebsocketCommandManifest };
-export { encodeWebsocketCommandManifest };
-export { decodeWebsocketMessageBuildSuccess };
-export { encodeWebsocketMessageBuildSuccess };
-export { decodeWebsocketMessageBuildFailure };
-export { encodeWebsocketMessageBuildFailure };
-export { decodeWebsocketCommandBuildWithFilePath };
-export { encodeWebsocketCommandBuildWithFilePath };
-export { decodeWebsocketMessageResolveID };
-export { encodeWebsocketMessageResolveID };
-export { decodeNPMRegistry };
-export { encodeNPMRegistry };
-export { decodeNPMRegistryMap };
-export { encodeNPMRegistryMap };
-export { decodeBunInstall };
-export { encodeBunInstall };
-export { decodeClientServerModule };
-export { encodeClientServerModule };
-export { decodeClientServerModuleManifest };
-export { encodeClientServerModuleManifest };
-export { decodeGetTestsRequest };
-export { encodeGetTestsRequest };
-export { TestKind };
-export { TestKindKeys };
-export { decodeTestResponseItem };
-export { encodeTestResponseItem };
-export { decodeGetTestsResponse };
-export { encodeGetTestsResponse };
+export {
+  CSSInJSBehavior,
+  CSSInJSBehaviorKeys,
+  DotEnvBehavior,
+  DotEnvBehaviorKeys,
+  FallbackStep,
+  FallbackStepKeys,
+  FrameworkEntryPointType,
+  FrameworkEntryPointTypeKeys,
+  ImportKind,
+  ImportKindKeys,
+  JSXRuntime,
+  JSXRuntimeKeys,
+  Loader,
+  LoaderKeys,
+  MessageLevel,
+  MessageLevelKeys,
+  ModuleImportType,
+  ModuleImportTypeKeys,
+  Reloader,
+  ReloaderKeys,
+  ResolveMode,
+  ResolveModeKeys,
+  ScanDependencyMode,
+  ScanDependencyModeKeys,
+  SourceMapMode,
+  SourceMapModeKeys,
+  StackFrameScope,
+  StackFrameScopeKeys,
+  Target,
+  TargetKeys,
+  TestKind,
+  TestKindKeys,
+  TransformResponseStatus,
+  TransformResponseStatusKeys,
+  WebsocketCommandKind,
+  WebsocketCommandKindKeys,
+  WebsocketMessageKind,
+  WebsocketMessageKindKeys,
+  decodeBunInstall,
+  decodeClientServerModule,
+  decodeClientServerModuleManifest,
+  decodeEnvConfig,
+  decodeFallbackMessageContainer,
+  decodeFileHandle,
+  decodeFrameworkConfig,
+  decodeFrameworkEntryPoint,
+  decodeFrameworkEntryPointMap,
+  decodeFrameworkEntryPointMessage,
+  decodeGetTestsRequest,
+  decodeGetTestsResponse,
+  decodeJSException,
+  decodeJSX,
+  decodeJavascriptBundle,
+  decodeJavascriptBundleContainer,
+  decodeJavascriptBundledModule,
+  decodeJavascriptBundledPackage,
+  decodeLoadedEnvConfig,
+  decodeLoadedFramework,
+  decodeLoadedRouteConfig,
+  decodeLoaderMap,
+  decodeLocation,
+  decodeLog,
+  decodeMessage,
+  decodeMessageData,
+  decodeMessageMeta,
+  decodeModule,
+  decodeModuleImportRecord,
+  decodeNPMRegistry,
+  decodeNPMRegistryMap,
+  decodeOutputFile,
+  decodeProblems,
+  decodeRouteConfig,
+  decodeRouter,
+  decodeScan,
+  decodeScanResult,
+  decodeScannedImport,
+  decodeSourceLine,
+  decodeStackFrame,
+  decodeStackFramePosition,
+  decodeStackTrace,
+  decodeStringMap,
+  decodeStringPointer,
+  decodeTestResponseItem,
+  decodeTransform,
+  decodeTransformOptions,
+  decodeTransformResponse,
+  decodeWebsocketCommand,
+  decodeWebsocketCommandBuild,
+  decodeWebsocketCommandBuildWithFilePath,
+  decodeWebsocketCommandManifest,
+  decodeWebsocketMessage,
+  decodeWebsocketMessageBuildFailure,
+  decodeWebsocketMessageBuildSuccess,
+  decodeWebsocketMessageFileChangeNotification,
+  decodeWebsocketMessageResolveID,
+  decodeWebsocketMessageWelcome,
+  encodeBunInstall,
+  encodeClientServerModule,
+  encodeClientServerModuleManifest,
+  encodeEnvConfig,
+  encodeFallbackMessageContainer,
+  encodeFileHandle,
+  encodeFrameworkConfig,
+  encodeFrameworkEntryPoint,
+  encodeFrameworkEntryPointMap,
+  encodeFrameworkEntryPointMessage,
+  encodeGetTestsRequest,
+  encodeGetTestsResponse,
+  encodeJSException,
+  encodeJSX,
+  encodeJavascriptBundle,
+  encodeJavascriptBundleContainer,
+  encodeJavascriptBundledModule,
+  encodeJavascriptBundledPackage,
+  encodeLoadedEnvConfig,
+  encodeLoadedFramework,
+  encodeLoadedRouteConfig,
+  encodeLoaderMap,
+  encodeLocation,
+  encodeLog,
+  encodeMessage,
+  encodeMessageData,
+  encodeMessageMeta,
+  encodeModule,
+  encodeModuleImportRecord,
+  encodeNPMRegistry,
+  encodeNPMRegistryMap,
+  encodeOutputFile,
+  encodeProblems,
+  encodeRouteConfig,
+  encodeRouter,
+  encodeScan,
+  encodeScanResult,
+  encodeScannedImport,
+  encodeSourceLine,
+  encodeStackFrame,
+  encodeStackFramePosition,
+  encodeStackTrace,
+  encodeStringMap,
+  encodeStringPointer,
+  encodeTestResponseItem,
+  encodeTransform,
+  encodeTransformOptions,
+  encodeTransformResponse,
+  encodeWebsocketCommand,
+  encodeWebsocketCommandBuild,
+  encodeWebsocketCommandBuildWithFilePath,
+  encodeWebsocketCommandManifest,
+  encodeWebsocketMessage,
+  encodeWebsocketMessageBuildFailure,
+  encodeWebsocketMessageBuildSuccess,
+  encodeWebsocketMessageFileChangeNotification,
+  encodeWebsocketMessageResolveID,
+  encodeWebsocketMessageWelcome,
+};

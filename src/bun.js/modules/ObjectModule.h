@@ -1,19 +1,23 @@
 #pragma once
 
 #include "../bindings/ZigGlobalObject.h"
-#include "JavaScriptCore/JSGlobalObject.h"
+#include <JavaScriptCore/JSGlobalObject.h>
 
 namespace Zig {
 JSC::SyntheticSourceProvider::SyntheticSourceGenerator
-generateObjectModuleSourceCode(JSC::JSGlobalObject *globalObject,
-                               JSC::JSObject *object);
+generateObjectModuleSourceCode(JSC::JSGlobalObject* globalObject,
+    JSC::JSObject* object);
 
 JSC::SyntheticSourceProvider::SyntheticSourceGenerator
-generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject *globalObject,
-                                      JSC::JSObject *object);
+generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject* globalObject,
+    JSC::JSObject* object);
 
 JSC::SyntheticSourceProvider::SyntheticSourceGenerator
-generateJSValueModuleSourceCode(JSC::JSGlobalObject *globalObject,
-                                JSC::JSValue value);
+generateJSValueModuleSourceCode(JSC::JSGlobalObject* globalObject,
+    JSC::JSValue value);
+
+JSC::SyntheticSourceProvider::SyntheticSourceGenerator
+generateJSValueExportDefaultObjectSourceCode(JSC::JSGlobalObject* globalObject,
+    JSC::JSValue value);
 
 } // namespace Zig

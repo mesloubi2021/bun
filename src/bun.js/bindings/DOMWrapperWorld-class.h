@@ -2,7 +2,7 @@
 
 #include "root.h"
 
-#include "wtf/Forward.h"
+#include <wtf/Forward.h>
 
 namespace WebCore {
 
@@ -50,7 +50,7 @@ protected:
 
 private:
     JSC::VM& m_vm;
-    HashSet<WindowProxy*> m_jsWindowProxies;
+    UncheckedKeyHashSet<WindowProxy*> m_jsWindowProxies;
     DOMObjectWrapperMap m_wrappers;
 
     String m_name;

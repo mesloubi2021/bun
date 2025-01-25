@@ -67,11 +67,10 @@ public:
 
     void onMessage(std::string_view message)
     {
-        WTF::String messageString = WTF::String::fromUTF8(message.data(), message.length());
+        WTF::String messageString = WTF::String::fromUTF8(std::span { message.data(), message.length() });
         Inspector::JSGlobalObjectDebugger* debugger = reinterpret_cast<Inspector::JSGlobalObjectDebugger*>(this->globalObject->debugger());
         if (debugger) {
             debugger->runWhilePausedCallback = [](JSC::JSGlobalObject& globalObject, bool& done) -> void {
-                Inspector::JSGlobalObjectDebugger* debugger = reinterpret_cast<Inspector::JSGlobalObjectDebugger*>(globalObject.debugger());
                 Bun__tickWhilePaused(&done);
             };
         }
@@ -121,19 +120,13 @@ static void addInspector(void* app, JSC::JSGlobalObject* globalObject)
                 globalObject->setInspectable(true);
                 *ws->getUserData() = new SSLBunInspectorConnection(ws, globalObject);
                 SSLBunInspectorConnection* inspector = *ws->getUserData();
-                inspector->onOpen(globalObject);
-                //
-            },
+                inspector->onOpen(globalObject); },
             .message = [](auto* ws, std::string_view message, uWS::OpCode opCode) {
                 SSLBunInspectorConnection* inspector = *(SSLBunInspectorConnection**)ws->getUserData();
-                inspector->onMessage(message);
-                //
-            },
+                inspector->onMessage(message); },
             .drain = [](auto* ws) {
                 SSLBunInspectorConnection* inspector = *(SSLBunInspectorConnection**)ws->getUserData();
-                inspector->drain();
-                //
-            },
+                inspector->drain(); },
             .ping = [](auto* /*ws*/, std::string_view) {
         /* Not implemented yet */ },
             .pong = [](auto* /*ws*/, std::string_view) {
@@ -163,19 +156,13 @@ static void addInspector(void* app, JSC::JSGlobalObject* globalObject)
                 globalObject->setInspectable(true);
                 *ws->getUserData() = new BunInspectorConnectionNoSSL(ws, globalObject);
                 BunInspectorConnectionNoSSL* inspector = *ws->getUserData();
-                inspector->onOpen(globalObject);
-                //
-            },
+                inspector->onOpen(globalObject); },
             .message = [](auto* ws, std::string_view message, uWS::OpCode opCode) {
-                BunInspectorConnectionNoSSL* inspector = *(BunInspectorConnectionNoSSL**)ws->getUserData();
-                inspector->onMessage(message);
-                //
-            },
+                    BunInspectorConnectionNoSSL* inspector = *(BunInspectorConnectionNoSSL**)ws->getUserData();
+                    inspector->onMessage(message); },
             .drain = [](auto* ws) {
-                BunInspectorConnectionNoSSL* inspector = *(BunInspectorConnectionNoSSL**)ws->getUserData();
-                inspector->drain();
-                //
-            },
+                        BunInspectorConnectionNoSSL* inspector = *(BunInspectorConnectionNoSSL**)ws->getUserData();
+                        inspector->drain(); },
             .ping = [](auto* /*ws*/, std::string_view) {
         /* Not implemented yet */ },
             .pong = [](auto* /*ws*/, std::string_view) {
@@ -191,7 +178,8 @@ static void addInspector(void* app, JSC::JSGlobalObject* globalObject)
     }
 }
 
-extern "C" void Bun__addInspector(bool isSSL, void* app, JSC::JSGlobalObject* globalObject)
+extern "C" void
+Bun__addInspector(bool isSSL, void* app, JSC::JSGlobalObject* globalObject)
 {
     if (isSSL) {
         addInspector<true>((uWS::TemplatedApp<true>*)app, globalObject);

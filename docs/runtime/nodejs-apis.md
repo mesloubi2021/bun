@@ -1,42 +1,26 @@
-Bun aims for complete Node.js API compatibility. Most `npm` packages intended for `Node.js` environments will work with Bun out of the box; the best way to know for certain is to try it.
+Every day, Bun gets closer to 100% Node.js API compatibility. Today, popular frameworks like Next.js, Express, and millions of `npm` packages intended for Node just work with Bun. To ensure compatibility, we run thousands of tests from Node.js' test suite before every release of Bun.
 
-This page is updated regularly to reflect compatibility status of the latest version of Bun. The information below reflects Bun's compatibility with _Node.js v20_. If you run into any bugs with a particular package, please [open an issue](https://bun.sh/issues). Opening issues for compatibility bugs helps us prioritize what to work on next.
+**If a package works in Node.js but doesn't work in Bun, we consider it a bug in Bun.** Please [open an issue](https://bun.sh/issues) and we'll fix it.
 
-## Built-in modules
+This page is updated regularly to reflect compatibility status of the latest version of Bun. The information below reflects Bun's compatibility with _Node.js v23_.
+
+## Built-in Node.js modules
 
 ### [`node:assert`](https://nodejs.org/api/assert.html)
 
-🟡 Missing `doesNotMatch`
-
-### [`node:async_hooks`](https://nodejs.org/api/async_hooks.html)
-
-🟡 Only `AsyncLocalStorage`, and `AsyncResource` are implemented. `AsyncResource` is missing `bind`.
+🟢 Fully implemented.
 
 ### [`node:buffer`](https://nodejs.org/api/buffer.html)
 
 🟢 Fully implemented.
 
-### [`node:child_process`](https://nodejs.org/api/child_process.html)
-
-🟡 Missing `Stream` stdio, `proc.gid` `proc.uid`. IPC has partial support and only current only works with other `bun` processes.
-
-### [`node:cluster`](https://nodejs.org/api/cluster.html)
-
-🔴 Not implemented.
-
 ### [`node:console`](https://nodejs.org/api/console.html)
 
 🟢 Fully implemented.
 
-### [`node:crypto`](https://nodejs.org/api/crypto.html)
-
-🟡 Missing `Certificate` `ECDH` `X509Certificate` `checkPrime` `checkPrimeSync` `diffieHellman` `generatePrime` `generatePrimeSync` `getCipherInfo` `getFips` `hkdf` `hkdfSync` `secureHeapUsed` `setEngine` `setFips`
-
-Some methods are not optimized yet.
-
 ### [`node:dgram`](https://nodejs.org/api/dgram.html)
 
-🔴 Not implemented.
+🟢 Fully implemented. > 90% of Node.js's test suite passes.
 
 ### [`node:diagnostics_channel`](https://nodejs.org/api/diagnostics_channel.html)
 
@@ -44,99 +28,55 @@ Some methods are not optimized yet.
 
 ### [`node:dns`](https://nodejs.org/api/dns.html)
 
-🟡 Missing `cancel` `setServers` `getDefaultResultOrder`
-
-### [`node:domain`](https://nodejs.org/api/domain.html)
-
-🟡 Missing `Domain` `active`
+🟢 Fully implemented. > 90% of Node.js's test suite passes.
 
 ### [`node:events`](https://nodejs.org/api/events.html)
 
-🟡 Missing `on` `addAbortListener` `getMaxListeners`
+🟢 Fully implemented. `EventEmitterAsyncResource` uses `AsyncResource` underneath. 100% of Node.js's test suite for EventEmitter passes.
 
 ### [`node:fs`](https://nodejs.org/api/fs.html)
 
-🟡 Missing `Dir` `fdatasync` `fdatasyncSync` `openAsBlob` `opendir` `opendirSync` `statfs` `statfsSync`. `fs.promises.open` incorrectly returns a file descriptor instead of a `FileHandle`.
+🟢 Fully implemented. 92% of Node.js's test suite passes.
 
 ### [`node:http`](https://nodejs.org/api/http.html)
 
-🟢 Fully implemented.
-
-### [`node:http2`](https://nodejs.org/api/http2.html)
-
-🔴 Not implemented.
+🟢 Fully implemented. Outgoing client request body is currently buffered instead of streamed.
 
 ### [`node:https`](https://nodejs.org/api/https.html)
 
-🟢 Fully implemented.
-
-### [`node:inspector`](https://nodejs.org/api/inspector.html)
-
-🔴 Not implemented.
-
-### [`node:module`](https://nodejs.org/api/module.html)
-
-🟢 Missing `runMain` `syncBuiltinESMExports`, `Module#load()`. Attempts to override or patch the module cache will fail.
-
-### [`node:net`](https://nodejs.org/api/net.html)
-
-🟡 Missing `BlockList` `SocketAddress` `Stream` `getDefaultAutoSelectFamily` `getDefaultAutoSelectFamilyAttemptTimeout` `setDefaultAutoSelectFamily` `setDefaultAutoSelectFamilyAttemptTimeout` `Server#ref()` `Server#unref()` `Socket#ref()` `Socket#unref()`.
+🟢 APIs are implemented, but `Agent` is not always used yet.
 
 ### [`node:os`](https://nodejs.org/api/os.html)
 
-🟢 Fully implemented.
+🟢 Fully implemented. 100% of Node.js's test suite passes.
 
 ### [`node:path`](https://nodejs.org/api/path.html)
 
-🟢 Fully implemented.
-
-### [`node:perf_hooks`](https://nodejs.org/api/perf_hooks.html)
-
-🟡 Only `perf_hooks.performance.now()` and `perf_hooks.performance.timeOrigin` are implemented. Missing `Performance` `PerformanceMark` `PerformanceMeasure` `PerformanceObserverEntryList` `PerformanceResourceTiming` `createHistogram` `monitorEventLoopDelay`. It's recommended to use `performance` global instead of `perf_hooks.performance`.
-
-### [`node:process`](https://nodejs.org/api/process.html)
-
-🟡 See [`process`](#process) Global.
+🟢 Fully implemented. 100% of Node.js's test suite passes.
 
 ### [`node:punycode`](https://nodejs.org/api/punycode.html)
 
-🟢 Fully implemented. _Deprecated by Node.js._
+🟢 Fully implemented. 100% of Node.js's test suite passes, _deprecated by Node.js_.
 
 ### [`node:querystring`](https://nodejs.org/api/querystring.html)
 
-🟢 Fully implemented.
+🟢 Fully implemented. 100% of Node.js's test suite passes.
 
 ### [`node:readline`](https://nodejs.org/api/readline.html)
 
 🟢 Fully implemented.
 
-### [`node:repl`](https://nodejs.org/api/repl.html)
-
-🔴 Not implemented.
-
 ### [`node:stream`](https://nodejs.org/api/stream.html)
-
-🟡 Missing `getDefaultHighWaterMark` `setDefaultHighWaterMark`
-
-### [`node:string_decoder`](https://nodejs.org/api/string_decoder.html)
 
 🟢 Fully implemented.
 
-### [`node:sys`](https://nodejs.org/api/util.html)
+### [`node:string_decoder`](https://nodejs.org/api/string_decoder.html)
 
-🟡 See [`node:util`](#node-util).
+🟢 Fully implemented. 100% of Node.js's test suite passes.
 
 ### [`node:timers`](https://nodejs.org/api/timers.html)
 
 🟢 Recommended to use global `setTimeout`, et. al. instead.
-
-### [`node:tls`](https://nodejs.org/api/tls.html)
-
-🟡 Missing `tls.createSecurePair`.
-
-### [`node:trace_events`](https://nodejs.org/api/tracing.html)
-
-🔴 Not implemented.
 
 ### [`node:tty`](https://nodejs.org/api/tty.html)
 
@@ -144,19 +84,73 @@ Some methods are not optimized yet.
 
 ### [`node:url`](https://nodejs.org/api/url.html)
 
-🟡 Missing `domainToASCII` `domainToUnicode`. It's recommended to use `URL` and `URLSearchParams` globals instead.
+🟢 Fully implemented.
+
+### [`node:zlib`](https://nodejs.org/api/zlib.html)
+
+🟢 Fully implemented. 98% of Node.js's test suite passes.
+
+### [`node:async_hooks`](https://nodejs.org/api/async_hooks.html)
+
+🟡 `AsyncLocalStorage`, and `AsyncResource` are implemented. v8 promise hooks are not called, and its usage is [strongly discouraged](https://nodejs.org/docs/latest/api/async_hooks.html#async-hooks).
+
+### [`node:child_process`](https://nodejs.org/api/child_process.html)
+
+🟡 Missing `proc.gid` `proc.uid`. `Stream` class not exported. IPC cannot send socket handles. Node.js <> Bun IPC can be used with JSON serialization.
+
+### [`node:cluster`](https://nodejs.org/api/cluster.html)
+
+🟡 Handles and file descriptors cannot be passed between workers, which means load-balancing HTTP requests across processes is only supported on Linux at this time (via `SO_REUSEPORT`). Otherwise, implemented but not battle-tested.
+
+### [`node:crypto`](https://nodejs.org/api/crypto.html)
+
+🟡 Missing `ECDH` `checkPrime` `checkPrimeSync` `generatePrime` `generatePrimeSync` `hkdf` `hkdfSync` `secureHeapUsed` `setEngine` `setFips`
+
+Some methods are not optimized yet.
+
+### [`node:domain`](https://nodejs.org/api/domain.html)
+
+🟡 Missing `Domain` `active`
+
+### [`node:http2`](https://nodejs.org/api/http2.html)
+
+🟡 Client & server are implemented (95.25% of gRPC's test suite passes). Missing `options.allowHTTP1`, `options.enableConnectProtocol`, ALTSVC extension, and `http2stream.pushStream`.
+
+### [`node:module`](https://nodejs.org/api/module.html)
+
+🟡 Missing `runMain` `syncBuiltinESMExports`, `Module#load()`. Overriding `require.cache` is supported for ESM & CJS modules. `module._extensions`, `module._pathCache`, `module._cache` are no-ops. `module.register` is not implemented and we recommend using a [`Bun.plugin`](https://bun.sh/docs/runtime/plugins) in the meantime.
+
+### [`node:net`](https://nodejs.org/api/net.html)
+
+🟡 `SocketAddress` class not exposed (but implemented). `BlockList` exists but is a no-op.
+
+### [`node:perf_hooks`](https://nodejs.org/api/perf_hooks.html)
+
+🟡 Missing `createHistogram` `monitorEventLoopDelay`. It's recommended to use `performance` global instead of `perf_hooks.performance`.
+
+### [`node:process`](https://nodejs.org/api/process.html)
+
+🟡 See [`process`](#process) Global.
+
+### [`node:sys`](https://nodejs.org/api/util.html)
+
+🟡 See [`node:util`](#node-util).
+
+### [`node:tls`](https://nodejs.org/api/tls.html)
+
+🟡 Missing `tls.createSecurePair`.
 
 ### [`node:util`](https://nodejs.org/api/util.html)
 
-🟡 Missing `MIMEParams` `MIMEType` `aborted` `debug` `getSystemErrorMap` `getSystemErrorName` `parseArgs` `transferableAbortController` `transferableAbortSignal` `stripVTControlCharacters`
+🟡 Missing `MIMEParams` `MIMEType` `debug` `getSystemErrorMap` `transferableAbortController` `transferableAbortSignal` `stripVTControlCharacters`
 
 ### [`node:v8`](https://nodejs.org/api/v8.html)
 
-🔴 `serialize` and `deserialize` use JavaScriptCore's wire format instead of V8's. Otherwise, not implemented. For profiling, use [`bun:jsc`](/docs/project/benchmarking#bunjsc) instead.
+🟡 `writeHeapSnapshot` and `getHeapSnapshot` are implemented. `serialize` and `deserialize` use JavaScriptCore's wire format instead of V8's. Other methods are not implemented. For profiling, use [`bun:jsc`](https://bun.sh/docs/project/benchmarking#bunjsc) instead.
 
 ### [`node:vm`](https://nodejs.org/api/vm.html)
 
-🟡 Core functionality works, but VM modules are not implemented. Missing `createScript`. `ShadowRealm` can be used.
+🟡 Core functionality works, but experimental VM ES modules are not implemented, including `vm.Module`, `vm.SourceTextModule`, `vm.SyntheticModule`,`importModuleDynamically`, and `vm.measureMemory`. Options like `timeout`, `breakOnSigint`, `cachedData` are not implemented yet.
 
 ### [`node:wasi`](https://nodejs.org/api/wasi.html)
 
@@ -164,13 +158,29 @@ Some methods are not optimized yet.
 
 ### [`node:worker_threads`](https://nodejs.org/api/worker_threads.html)
 
-🟡 `Worker` doesn't support the following options: `eval` `argv` `execArgv` `stdin` `stdout` `stderr` `trackedUnmanagedFds` `resourceLimits`. Missing `markAsUntransferable` `moveMessagePortToContext` `getHeapSnapshot`.
+🟡 `Worker` doesn't support the following options: `stdin` `stdout` `stderr` `trackedUnmanagedFds` `resourceLimits`. Missing `markAsUntransferable` `moveMessagePortToContext` `getHeapSnapshot`.
 
-### [`node:zlib`](https://nodejs.org/api/zlib.html)
+### [`node:inspector`](https://nodejs.org/api/inspector.html)
 
-🟡 Missing `BrotliCompress` `BrotliDecompress` `brotliCompressSync` `brotliDecompress` `brotliDecompressSync` `createBrotliCompress` `createBrotliDecompress`. Unoptimized.
+🔴 Not implemented.
 
-## Globals
+### [`node:repl`](https://nodejs.org/api/repl.html)
+
+🔴 Not implemented.
+
+### [`node:sqlite`](https://nodejs.org/api/sqlite.html)
+
+🔴 Not implemented.
+
+### [`node:test`](https://nodejs.org/api/test.html)
+
+🔴 Not implemented. Use [`bun:test`](https://bun.sh/docs/cli/test) instead.
+
+### [`node:trace_events`](https://nodejs.org/api/tracing.html)
+
+🔴 Not implemented.
+
+## Node.js globals
 
 The table below lists all globals implemented by Node.js and Bun's current compatibility status.
 
@@ -188,7 +198,7 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`Buffer`](https://nodejs.org/api/buffer.html#class-buffer)
 
-🟡 Incomplete implementation of `base64` and `base64url` encodings.
+🟢 Fully implemented.
 
 ### [`ByteLengthQueuingStrategy`](https://developer.mozilla.org/en-US/docs/Web/API/ByteLengthQueuingStrategy)
 
@@ -308,27 +318,27 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`PerformanceEntry`](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceEntry)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`PerformanceMark`](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceMark)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`PerformanceMeasure`](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceMeasure)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`PerformanceObserver`](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`PerformanceObserverEntryList`](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserverEntryList)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`PerformanceResourceTiming`](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceResourceTiming)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`performance`](https://developer.mozilla.org/en-US/docs/Web/API/performance)
 
@@ -336,7 +346,7 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`process`](https://nodejs.org/api/process.html)
 
-🟡 Missing `domain` `hasUncaughtExceptionCaptureCallback` `initgroups` `report` `resourceUsage` `setUncaughtExceptionCaptureCallback` `setegid` `seteuid` `setgid` `setgroups` `setuid` `allowedNodeEnvironmentFlags` `getActiveResourcesInfo` `setActiveResourcesInfo` `moduleLoadList` `setSourceMapsEnabled` `channel`. `process.binding` is partially implemented.
+🟡 Mostly implemented. `process.binding` (internal Node.js bindings some packages rely on) is partially implemented. `process.title` is a currently a no-op on macOS & Linux. `getActiveResourcesInfo` `setActiveResourcesInfo`, `getActiveResources` and `setSourceMapsEnabled` are stubs. Newer APIs like `process.loadEnvFile` and `process.getBuiltinModule` are not implemented yet.
 
 ### [`queueMicrotask()`](https://developer.mozilla.org/en-US/docs/Web/API/queueMicrotask)
 
@@ -352,11 +362,11 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`ReadableStreamBYOBReader`](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStreamBYOBReader)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`ReadableStreamBYOBRequest`](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStreamBYOBRequest)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`ReadableStreamDefaultController`](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStreamDefaultController)
 
@@ -368,7 +378,7 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`require()`](https://nodejs.org/api/globals.html#require)
 
-🟢 Fully implemented, including [`require.main`](https://nodejs.org/api/modules.html#requiremain), [`require.cache`](https://nodejs.org/api/modules.html#requirecache), [`require.resolve`](https://nodejs.org/api/modules.html#requireresolverequest-options)
+🟢 Fully implemented, including [`require.main`](https://nodejs.org/api/modules.html#requiremain), [`require.cache`](https://nodejs.org/api/modules.html#requirecache), [`require.resolve`](https://nodejs.org/api/modules.html#requireresolverequest-options). `require.extensions` is a stub.
 
 ### [`Response`](https://developer.mozilla.org/en-US/docs/Web/API/Response)
 
@@ -408,7 +418,7 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`TextDecoderStream`](https://developer.mozilla.org/en-US/docs/Web/API/TextDecoderStream)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`TextEncoder`](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder)
 
@@ -416,7 +426,7 @@ The table below lists all globals implemented by Node.js and Bun's current compa
 
 ### [`TextEncoderStream`](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoderStream)
 
-🔴 Not implemented.
+🟢 Fully implemented.
 
 ### [`TransformStream`](https://developer.mozilla.org/en-US/docs/Web/API/TransformStream)
 

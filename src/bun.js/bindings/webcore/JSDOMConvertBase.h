@@ -24,6 +24,7 @@
  */
 
 #pragma once
+
 #include "root.h"
 #include "ZigGlobalObject.h"
 #include "JSDOMGlobalObject.h"
@@ -217,7 +218,7 @@ template<typename T, typename U> inline JSC::JSValue toJS(JSC::JSGlobalObject& l
     }
 }
 
-template<typename T, typename U> inline JSC::JSValue toJSNewlyCreated(JSC::JSGlobalObject& lexicalGlobalObject, JSDOMGlobalObject& globalObject, JSC::ThrowScope& throwScope, U&& valueOrFunctor)
+template<typename T, typename U> inline JSC::JSValue toJSNewlyCreated(JSC::JSGlobalObject& lexicalGlobalObject, WebCore::JSDOMGlobalObject& globalObject, JSC::ThrowScope& throwScope, U&& valueOrFunctor)
 {
     if constexpr (std::is_invocable_v<U>) {
         using FunctorReturnType = std::invoke_result_t<U>;

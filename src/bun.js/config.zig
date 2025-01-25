@@ -13,12 +13,11 @@ const std = @import("std");
 const Fs = @import("../fs.zig");
 const resolver = @import("../resolver/resolver.zig");
 const ast = @import("../import_record.zig");
-const logger = @import("root").bun.logger;
+const logger = bun.logger;
 const Api = @import("../api/schema.zig").Api;
 const options = @import("../options.zig");
-const Bundler = bun.bundler.ServeBundler;
+const Transpiler = bun.transpiler.ServeBundler;
 const js_printer = bun.js_printer;
-const http = @import("../bun_dev_http_server.zig");
 
 pub const DefaultBunDefines = struct {
     pub const Keys = struct {
@@ -32,7 +31,6 @@ pub const DefaultBunDefines = struct {
 pub fn configureTransformOptionsForBunVM(allocator: std.mem.Allocator, _args: Api.TransformOptions) !Api.TransformOptions {
     var args = _args;
 
-    // args.serve = false;
     args.write = false;
     args.resolve = Api.ResolveMode.lazy;
     return try configureTransformOptionsForBun(allocator, args);

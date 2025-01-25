@@ -21,12 +21,12 @@
 
 #pragma once
 #include "root.h"
+#include "ZigGlobalObject.h"
 
 #include "JSDOMGlobalObject.h"
-#include "ZigGlobalObject.h"
 #include "NodeConstants.h"
-#include "JavaScriptCore/JSDestructibleObject.h"
-#include "wtf/SignedPtr.h"
+#include <JavaScriptCore/JSDestructibleObject.h>
+#include <wtf/SignedPtr.h>
 
 namespace WebCore {
 using namespace Zig;
@@ -84,6 +84,7 @@ public:
     using DOMWrapped = ImplementationClass;
 
     ImplementationClass& wrapped() const { return m_wrapped; }
+    Ref<ImplementationClass> protectedWrapped() const { return m_wrapped; }
     static ptrdiff_t offsetOfWrapped() { return OBJECT_OFFSETOF(JSDOMWrapper, m_wrapped); }
     constexpr static bool hasCustomPtrTraits() { return !std::is_same_v<PtrTraits, RawPtrTraits<ImplementationClass>>; };
 

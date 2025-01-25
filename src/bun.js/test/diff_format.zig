@@ -7,7 +7,7 @@ const string = bun.string;
 const JSC = bun.JSC;
 const JSValue = JSC.JSValue;
 const JSGlobalObject = JSC.JSGlobalObject;
-const ZigConsoleClient = JSC.ZigConsoleClient;
+const ConsoleObject = JSC.ConsoleObject;
 const DiffMatchPatch = @import("../../deps/diffz/DiffMatchPatch.zig");
 
 pub const DiffFormatter = struct {
@@ -15,7 +15,7 @@ pub const DiffFormatter = struct {
     expected_string: ?string = null,
     received: ?JSValue = null,
     expected: ?JSValue = null,
-    globalObject: *JSGlobalObject,
+    globalThis: *JSGlobalObject,
     not: bool = false,
 
     pub fn format(this: DiffFormatter, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -91,45 +91,46 @@ pub const DiffFormatter = struct {
             var buffered_writer_ = MutableString.BufferedWriter{ .context = &received_buf };
             var buffered_writer = &buffered_writer_;
 
-            var buf_writer = buffered_writer.writer();
+            const buf_writer = buffered_writer.writer();
             const Writer = @TypeOf(buf_writer);
 
-            const fmt_options = ZigConsoleClient.FormatOptions{
+            const fmt_options = ConsoleObject.FormatOptions{
                 .enable_colors = false,
                 .add_newline = false,
                 .flush = false,
                 .ordered_properties = true,
                 .quote_strings = true,
+                .max_depth = 100,
             };
-            ZigConsoleClient.format(
+            ConsoleObject.format2(
                 .Debug,
-                this.globalObject,
+                this.globalThis,
                 @as([*]const JSValue, @ptrCast(&received)),
                 1,
                 Writer,
                 Writer,
                 buf_writer,
                 fmt_options,
-            );
+            ) catch {}; // TODO:
             buffered_writer.flush() catch unreachable;
 
             buffered_writer_.context = &expected_buf;
 
-            ZigConsoleClient.format(
+            ConsoleObject.format2(
                 .Debug,
-                this.globalObject,
+                this.globalThis,
                 @as([*]const JSValue, @ptrCast(&this.expected)),
                 1,
                 Writer,
                 Writer,
                 buf_writer,
                 fmt_options,
-            );
+            ) catch {}; // TODO:
             buffered_writer.flush() catch unreachable;
         }
 
-        const received_slice = received_buf.toOwnedSliceLeaky();
-        const expected_slice = expected_buf.toOwnedSliceLeaky();
+        const received_slice = received_buf.slice();
+        const expected_slice = expected_buf.slice();
 
         if (this.not) {
             const not_fmt = "Expected: not <green>{s}<r>";
@@ -141,21 +142,21 @@ pub const DiffFormatter = struct {
             return;
         }
 
-        switch (received.determineDiffMethod(expected, this.globalObject)) {
+        switch (received.determineDiffMethod(expected, this.globalThis)) {
             .none => {
                 const fmt = "Expected: <green>{any}<r>\nReceived: <red>{any}<r>";
-                var formatter = ZigConsoleClient.Formatter{ .globalThis = this.globalObject, .quote_strings = true };
+                var formatter = ConsoleObject.Formatter{ .globalThis = this.globalThis, .quote_strings = true };
                 if (Output.enable_ansi_colors) {
                     try writer.print(Output.prettyFmt(fmt, true), .{
-                        expected.toFmt(this.globalObject, &formatter),
-                        received.toFmt(this.globalObject, &formatter),
+                        expected.toFmt(&formatter),
+                        received.toFmt(&formatter),
                     });
                     return;
                 }
 
                 try writer.print(Output.prettyFmt(fmt, true), .{
-                    expected.toFmt(this.globalObject, &formatter),
-                    received.toFmt(this.globalObject, &formatter),
+                    expected.toFmt(&formatter),
+                    received.toFmt(&formatter),
                 });
                 return;
             },

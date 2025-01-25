@@ -7,7 +7,8 @@ A custom runtime layer that runs Bun on AWS Lambda.
 First, you will need to deploy the layer to your AWS account. Clone this repository and run the `publish-layer` script to get started. Note: the `publish-layer` script also builds the layer.
 
 ```sh
-git clone git@github.com:oven-sh/bun.git
+git clone --filter=blob:none --sparse https://github.com/oven-sh/bun.git
+git -C bun sparse-checkout set packages/bun-lambda
 cd bun/packages/bun-lambda
 bun install
 bun run publish-layer
@@ -58,7 +59,7 @@ export default {
 
 The final step is to upload your Bun handler. You can technically write the handler directly in the console if you wish, but if you want a full development environment, use the Bun toolkit. There are several ways you can choose to build and manage your artifacts, but follow these steps for a simple approach:
 
-1. Run `bun build <handler-entry>.[ts|js] --outfile /dist/handler.js`
+1. Run `bun build <handler-entry>.[ts|js] --outfile ./dist/handler.js`
 2. Zip the `/dist` folder
 
 ### Step 3: Create the Lambda function on AWS

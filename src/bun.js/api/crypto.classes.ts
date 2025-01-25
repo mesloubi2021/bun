@@ -1,4 +1,4 @@
-import { define } from "../scripts/class-definitions";
+import { define } from "../../codegen/class-definitions";
 
 const names = ["SHA1", "MD5", "MD4", "SHA224", "SHA512", "SHA384", "SHA256", "SHA512_256"];
 const named = names.map(name => {
@@ -42,11 +42,13 @@ export default [
     proto: {
       getRandomValues: {
         fn: "getRandomValues",
-        DOMJIT: {
-          returns: "JSValue",
-          "pure": false,
-          args: ["JSUint8Array"],
-        },
+        // https://discord.com/channels/876711213126520882/1276103693665828894/1276133319033229363
+        // https://discord.com/channels/876711213126520882/1276103693665828894/1276127092047609919
+        // DOMJIT: {
+        //   returns: "JSValue",
+        //   "pure": false,
+        //   args: ["JSUint8Array"],
+        // },
       },
       randomUUID: {
         fn: "randomUUID",
@@ -64,10 +66,6 @@ export default [
           "pure": false,
           args: ["JSUint8Array", "JSUint8Array"],
         },
-        length: 2,
-      },
-      randomInt: {
-        fn: "randomInt",
         length: 2,
       },
       scryptSync: {

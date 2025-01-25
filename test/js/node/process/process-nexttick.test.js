@@ -1,7 +1,7 @@
 // Running this file in jest/vitest does not work as expected. Jest & Vitest
 // mess with timers, producing unreliable results. You must manually test this
 // in Node.
-import { test, expect, it } from "bun:test";
+import { expect, it } from "bun:test";
 const isBun = !!process.versions.bun;
 
 it("process.nextTick", async () => {
@@ -104,11 +104,14 @@ it("process.nextTick 2 args", async () => {
 it("process.nextTick 5 args", async () => {
   await new Promise((resolve, reject) => {
     var args = [12345, "hello", "hello", "hello", 5];
-    process.nextTick((...receivedArgs) => {
-      if (!args.every((arg, index) => arg === receivedArgs[index]))
-        reject(new Error("process.nextTick called with wrong arguments"));
-      resolve(true);
-    }, ...args);
+    process.nextTick(
+      (...receivedArgs) => {
+        if (!args.every((arg, index) => arg === receivedArgs[index]))
+          reject(new Error("process.nextTick called with wrong arguments"));
+        resolve(true);
+      },
+      ...args,
+    );
   });
 });
 

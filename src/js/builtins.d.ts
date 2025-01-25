@@ -1,3 +1,4 @@
+/// <reference types="../../build/debug/codegen/generated.d.ts" />
 // Typedefs for JSC intrinsics. Instead of @, we use $
 type TODO = any;
 
@@ -9,10 +10,19 @@ type TODO = any;
  * This only works in debug builds, the log fn is completely removed in release builds.
  */
 declare function $debug(...args: any[]): void;
-/** $assert is a preprocessor macro that only runs in debug mode. it throws an error if the first argument is falsy.
- * The source code passed to `check` is inlined in the message, but in addition you can pass additional messages.
+/**
+ * Assert that a condition holds in debug builds.
+ *
+ * $assert is a preprocessor macro that only runs in debug mode. it throws an
+ * error if the first argument is falsy.  The source code passed to `check` is
+ * inlined in the message, but in addition you can pass additional messages.
+ *
+ * @note gets removed in release builds. Do not put code with side effects in the `check`.
  */
 declare function $assert(check: any, ...message: any[]): asserts check;
+
+/** Asserts the input is a promise. Returns `true` if the promise is resolved */
+declare function $isPromiseResolved(promise: Promise<any>): boolean;
 
 declare const IS_BUN_DEVELOPMENT: boolean;
 
@@ -23,7 +33,7 @@ declare var $overriddenName: string;
 /** ??? */
 declare var $linkTimeConstant: never;
 /** Assign to this directly above a function declaration (like a decorator) to set visibility */
-declare var $visibility: "Public" | "Private";
+declare var $visibility: "Public" | "Private" | "PrivateRecursive";
 /** ??? */
 declare var $nakedConstructor: never;
 /** Assign to this directly above a function declaration (like a decorator) to set intrinsic */
@@ -32,6 +42,8 @@ declare var $intrinsic: string;
 declare var $constructor;
 /** Place this directly above a function declaration (like a decorator) to NOT include "use strict" */
 declare var $sloppy;
+/** Place this directly above a function declaration (like a decorator) to always inline the function */
+declare var $alwaysInline;
 
 declare function $extractHighWaterMarkFromQueuingStrategyInit(obj: any): any;
 
@@ -61,11 +73,15 @@ declare function $getByIdDirectPrivate<T = any>(obj: any, key: string): T;
 declare function $getByValWithThis(target: any, receiver: any, propertyKey: string): void;
 /** gets the prototype of an object */
 declare function $getPrototypeOf(value: any): any;
-/** gets an internal property on a promise
+/**
+ * Gets an internal property on a promise
  *
  *  You can pass
- *  - $promiseFieldFlags - get a number with flags
- *  - $promiseFieldReactionsOrResult - get the result (like Bun.peek)
+ *  - {@link $promiseFieldFlags} - get a number with flags
+ *  - {@link $promiseFieldReactionsOrResult} - get the result (like {@link Bun.peek})
+ *
+ * @param promise the promise to get the field from
+ * @param key an internal field id.
  */
 declare function $getPromiseInternalField<K extends PromiseFieldType, V>(
   promise: Promise<V>,
@@ -87,7 +103,21 @@ declare function $getMapIteratorInternalField(): TODO;
 declare function $getSetIteratorInternalField(): TODO;
 declare function $getProxyInternalField(): TODO;
 declare function $idWithProfile(): TODO;
+/**
+ * True for object-like `JSCell`s. That is, this is roughly equivalent to this
+ * JS code:
+ * ```js
+ * typeof obj === "object" && obj !== null
+ * ```
+ *
+ * @param obj The object to check
+ * @returns `true` if `obj` is an object-like `JSCell`
+ *
+ * @see [JSCell.h](https://github.com/oven-sh/WebKit/blob/main/Source/JavaScriptCore/runtime/JSCell.h)
+ * @see [JIT implementation](https://github.com/oven-sh/WebKit/blob/433f7598bf3537a295d0af5ffd83b9a307abec4e/Source/JavaScriptCore/jit/JITOpcodes.cpp#L311)
+ */
 declare function $isObject(obj: unknown): obj is object;
+declare function $isArray(obj: unknown): obj is any[];
 declare function $isCallable(fn: unknown): fn is CallableFunction;
 declare function $isConstructor(fn: unknown): fn is { new (...args: any[]): any };
 declare function $isJSArray(obj: unknown): obj is any[];
@@ -105,7 +135,7 @@ declare function $isArrayIterator(obj: unknown): obj is Iterator<any>;
 declare function $isMapIterator(obj: unknown): obj is Iterator<any>;
 declare function $isSetIterator(obj: unknown): obj is Iterator<any>;
 declare function $isUndefinedOrNull(obj: unknown): obj is null | undefined;
-declare function $tailCallForwardArguments(): TODO;
+declare function $tailCallForwardArguments(fn: CallableFunction, thisValue: ThisType): any;
 /**
  * **NOTE** - use `throw new TypeError()` instead. it compiles to the same builtin
  * @deprecated
@@ -154,8 +184,26 @@ declare function $toPropertyKey(x: any): PropertyKey;
  * `$toObject(this, "Class.prototype.method requires that |this| not be null or undefined");`
  */
 declare function $toObject(object: any, errorMessage?: string): object;
+/**
+ * ## References
+ * - [WebKit - `emit_intrinsic_newArrayWithSize`](https://github.com/oven-sh/WebKit/blob/e1a802a2287edfe7f4046a9dd8307c8b59f5d816/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp#L2317)
+ */
 declare function $newArrayWithSize<T>(size: number): T[];
-declare function $newArrayWithSpecies(): TODO;
+/**
+ * Optimized path for creating a new array storing objects with the same homogenous Structure
+ * as {@link array}.
+ *
+ * @param size the initial size of the new array
+ * @param array the array whose shape we want to copy
+ *
+ * @returns a new array
+ *
+ * ## References
+ * - [WebKit - `emit_intrinsic_newArrayWithSpecies`](https://github.com/oven-sh/WebKit/blob/e1a802a2287edfe7f4046a9dd8307c8b59f5d816/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp#L2328)
+ * - [WebKit - #4909](https://github.com/WebKit/WebKit/pull/4909)
+ * - [WebKit Bugzilla - Related Issue/Ticket](https://bugs.webkit.org/show_bug.cgi?id=245797)
+ */
+declare function $newArrayWithSpecies<T>(size: number, array: T[]): T[];
 declare function $newPromise(): TODO;
 declare function $createPromise(): TODO;
 declare const $iterationKindKey: TODO;
@@ -226,6 +274,7 @@ declare const $asyncContext: InternalFieldObject<[ReadonlyArray<any> | undefined
 declare var $_events: TODO;
 declare function $abortAlgorithm(): TODO;
 declare function $abortSteps(): TODO;
+declare function $addAbortAlgorithmToSignal(signal: AbortSignal, algorithm: () => void): TODO;
 declare function $addEventListener(): TODO;
 declare function $appendFromJS(): TODO;
 declare function $argv(): TODO;
@@ -252,7 +301,6 @@ declare function $closedPromise(): TODO;
 declare function $closedPromiseCapability(): TODO;
 declare function $code(): TODO;
 declare function $connect(): TODO;
-declare function $consumeReadableStream(): TODO;
 declare function $controlledReadableStream(): TODO;
 declare function $controller(): TODO;
 declare function $cork(): TODO;
@@ -324,7 +372,6 @@ declare function $localStreams(): TODO;
 declare function $main(): TODO;
 declare function $makeDOMException(): TODO;
 declare function $makeGetterTypeError(className: string, prop: string): Error;
-declare function $makeThisTypeError(className: string, method: string): Error;
 declare function $map(): TODO;
 declare function $method(): TODO;
 declare function $nextTick(): TODO;
@@ -366,6 +413,7 @@ declare function $readableStreamToArray(): TODO;
 declare function $reader(): TODO;
 declare function $readyPromise(): TODO;
 declare function $readyPromiseCapability(): TODO;
+declare function $removeAbortAlgorithmFromSignal(signal: AbortSignal, algorithmIdentifier: number): TODO;
 declare function $redirect(): TODO;
 declare function $relative(): TODO;
 declare function $releaseLock(): TODO;
@@ -463,8 +511,8 @@ type PromiseFieldType = typeof $promiseFieldFlags | typeof $promiseFieldReaction
 type PromiseFieldToValue<X extends PromiseFieldType, V> = X extends typeof $promiseFieldFlags
   ? number
   : X extends typeof $promiseFieldReactionsOrResult
-  ? V | any
-  : any;
+    ? V | any
+    : any;
 type WellKnownSymbol = keyof { [K in keyof SymbolConstructor as SymbolConstructor[K] extends symbol ? K : never]: K };
 
 // You can also `@` on any method on a classes to avoid prototype pollution and secret internals
@@ -478,8 +526,7 @@ declare interface PromiseConstructor<T> extends ClassWithIntrinsics<PromiseConst
 
 declare interface UnderlyingSource {
   $lazy?: boolean;
-  $bunNativeType?: number;
-  $bunNativePtr?: number;
+  $bunNativePtr?: undefined | TODO;
   autoAllocateChunkSize?: number;
 }
 
@@ -529,10 +576,73 @@ declare interface Function {
   path: string;
 }
 
+interface String {
+  $charCodeAt: String["charCodeAt"];
+  // add others as needed
+}
+
 declare var $Buffer: {
-  new (a: any, b?: any, c?: any): Buffer;
+  new (array: Array): Buffer;
+  new (arrayBuffer: ArrayBuffer, byteOffset?: number, length?: number): Buffer;
+  new (buffer: Buffer): Buffer;
+  new (size: number): Buffer;
+  new (string: string, encoding?: BufferEncoding): Buffer;
 };
 
 declare interface Error {
   code?: string;
 }
+
+declare function $makeAbortError(message?: string, options?: { cause: Error }): Error;
+
+/**
+ * -- Error Codes with manual messages
+ */
+declare function $ERR_INVALID_ARG_TYPE(argName: string, expectedType: string, actualValue: string): TypeError;
+declare function $ERR_INVALID_ARG_TYPE(argName: string, expectedTypes: any[], actualValue: string): TypeError;
+declare function $ERR_INVALID_ARG_VALUE(name: string, value: any, reason?: string): TypeError;
+declare function $ERR_UNKNOWN_ENCODING(enc: string): TypeError;
+declare function $ERR_STREAM_DESTROYED(method: string): Error;
+declare function $ERR_METHOD_NOT_IMPLEMENTED(method: string): Error;
+declare function $ERR_STREAM_ALREADY_FINISHED(method: string): Error;
+declare function $ERR_MISSING_ARGS(a1: string, a2?: string): TypeError;
+declare function $ERR_INVALID_RETURN_VALUE(expected_type: string, name: string, actual_value: any): TypeError;
+
+declare function $ERR_IPC_DISCONNECTED(): Error;
+declare function $ERR_SERVER_NOT_RUNNING(): Error;
+declare function $ERR_IPC_CHANNEL_CLOSED(): Error;
+declare function $ERR_SOCKET_BAD_TYPE(): Error;
+declare function $ERR_ZLIB_INITIALIZATION_FAILED(): Error;
+declare function $ERR_BUFFER_OUT_OF_BOUNDS(): Error;
+declare function $ERR_IPC_ONE_PIPE(): Error;
+declare function $ERR_SOCKET_ALREADY_BOUND(): Error;
+declare function $ERR_SOCKET_BAD_BUFFER_SIZE(): Error;
+declare function $ERR_SOCKET_DGRAM_IS_CONNECTED(): Error;
+declare function $ERR_SOCKET_DGRAM_NOT_CONNECTED(): Error;
+declare function $ERR_SOCKET_DGRAM_NOT_RUNNING(): Error;
+declare function $ERR_INVALID_CURSOR_POS(): Error;
+declare function $ERR_MULTIPLE_CALLBACK(): Error;
+declare function $ERR_STREAM_PREMATURE_CLOSE(): Error;
+declare function $ERR_STREAM_NULL_VALUES(): TypeError;
+declare function $ERR_STREAM_CANNOT_PIPE(): Error;
+declare function $ERR_STREAM_WRITE_AFTER_END(): Error;
+declare function $ERR_STREAM_UNSHIFT_AFTER_END_EVENT(): Error;
+declare function $ERR_STREAM_PUSH_AFTER_EOF(): Error;
+declare function $ERR_STREAM_UNABLE_TO_PIPE(): Error;
+declare function $ERR_ILLEGAL_CONSTRUCTOR(): TypeError;
+
+/**
+ * Convert a function to a class-like object.
+ *
+ * This does:
+ * - Sets the name of the function to the given name
+ * - Sets .prototype to Object.create(base?.prototype, { constructor: { value: fn } })
+ * - Calls Object.setPrototypeOf(fn, base ?? Function.prototype)
+ *
+ * @param fn - The function to convert to a class
+ * @param name - The name of the class
+ * @param base - The base class to inherit from
+ */
+declare function $toClass(fn: Function, name: string, base?: Function | undefined | null);
+
+declare function $min(a: number, b: number): number;

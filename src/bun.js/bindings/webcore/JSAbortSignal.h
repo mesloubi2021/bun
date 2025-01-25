@@ -33,14 +33,17 @@ public:
     using DOMWrapped = AbortSignal;
     static JSAbortSignal* create(JSC::Structure* structure, JSDOMGlobalObject* globalObject, Ref<AbortSignal>&& impl)
     {
-        JSAbortSignal* ptr = new (NotNull, JSC::allocateCell<JSAbortSignal>(globalObject->vm())) JSAbortSignal(structure, *globalObject, WTFMove(impl));
-        ptr->finishCreation(globalObject->vm());
+        auto& vm = globalObject->vm();
+        JSAbortSignal* ptr = new (NotNull, JSC::allocateCell<JSAbortSignal>(vm)) JSAbortSignal(structure, *globalObject, WTFMove(impl));
+        ptr->finishCreation(vm);
         return ptr;
     }
 
     static JSC::JSObject* createPrototype(JSC::VM&, JSDOMGlobalObject&);
     static JSC::JSObject* prototype(JSC::VM&, JSDOMGlobalObject&);
     static AbortSignal* toWrapped(JSC::VM&, JSC::JSValue);
+
+    static size_t estimatedSize(JSC::JSCell* cell, JSC::VM& vm);
 
     DECLARE_INFO;
 
@@ -58,14 +61,16 @@ public:
     }
     static JSC::GCClient::IsoSubspace* subspaceForImpl(JSC::VM& vm);
     DECLARE_VISIT_CHILDREN;
+    DECLARE_VISIT_OUTPUT_CONSTRAINTS;
     template<typename Visitor> void visitAdditionalChildren(Visitor&);
-
-    template<typename Visitor> static void visitOutputConstraints(JSCell*, Visitor&);
     static void analyzeHeap(JSCell*, JSC::HeapAnalyzer&);
     AbortSignal& wrapped() const
     {
         return static_cast<AbortSignal&>(Base::wrapped());
     }
+
+    Ref<AbortSignal> protectedWrapped() const;
+
 protected:
     JSAbortSignal(JSC::Structure*, JSDOMGlobalObject&, Ref<AbortSignal>&&);
 
@@ -74,7 +79,7 @@ protected:
 
 class JSAbortSignalOwner final : public JSC::WeakHandleOwner {
 public:
-    bool isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown>, void* context, JSC::AbstractSlotVisitor&, const char**) final;
+    bool isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown>, void* context, JSC::AbstractSlotVisitor&, ASCIILiteral*) final;
     void finalize(JSC::Handle<JSC::Unknown>, void* context) final;
 };
 
